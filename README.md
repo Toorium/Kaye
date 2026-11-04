@@ -17,7 +17,7 @@
   </p>
 </div>
 
-![Kaye with an R15 rig mid-run, its right shoulder selected and keys on the timeline](docs/images/hero.png)
+![Kaye with an R6 rig in Roblox's template clothing, its bones drawn on top and the Workspace listing its joints](docs/images/cover-r6.png)
 
 Kaye is a free animation program made only for Roblox. Open your rig's `.rbxm`, animate it, and drag the result straight back into Studio. No add-ons to install, no converting files, no rig to rebuild.
 
