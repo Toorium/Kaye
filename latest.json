@@ -1,5 +1,12 @@
 {
-  "version": "0.1.0",
-  "notes": "",
-  "files": []
+    "version":  "0.1.1",
+    "notes":  "The first release on GitHub. Kaye now tells you when a new version is out, and updates itself when you click Update.",
+    "files":  [
+                  {
+                      "path":  "kaye.exe",
+                      "size":  42158592,
+                      "sha256":  "655c68ed5877e03bd19128af41686884d2a4129246dbb19020d2db4fa82f21da",
+                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.1/kaye.exe"
+                  }
+              ]
 }
