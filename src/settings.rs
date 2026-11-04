@@ -216,6 +216,11 @@ pub struct AnimationSettings {
     pub looping: bool,
     pub playback_speed: f32,
     pub play_every_frame: bool,
+    /// How far behind the mouse G, R and R R leave a bone, from 0 (exactly with it) to
+    /// `gizmo::MAX_WEIGHT`. See `gizmo::Weights`.
+    pub grab_weight: f32,
+    pub rotate_weight: f32,
+    pub free_rotate_weight: f32,
 }
 
 impl Default for AnimationSettings {
@@ -236,6 +241,9 @@ impl Default for AnimationSettings {
             looping: true,
             playback_speed: 1.0,
             play_every_frame: false,
+            grab_weight: 0.0,
+            rotate_weight: 0.0,
+            free_rotate_weight: 0.0,
         }
     }
 }

@@ -58,6 +58,23 @@ impl Space {
     }
 }
 
+/// How heavy G, R and R R make what they move. At 0 it follows the mouse exactly, and
+/// at 0.5 it goes half as far, like an influence turned down to half.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Weights {
+    pub grab: f32,
+    pub rotate: f32,
+    pub free_rotate: f32,
+}
+
+/// Past this, a bone would barely move at all.
+pub const MAX_WEIGHT: f32 = 0.95;
+
+/// How much of the mouse's travel a weight lets through.
+fn follow(weight: f32) -> f32 {
+    if weight.is_finite() { 1.0 - weight.clamp(0.0, MAX_WEIGHT) } else { 1.0 }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpKind {
     Move,
@@ -102,6 +119,9 @@ pub struct Session {
     origin: Xf,
     /// Other selected bones that move along: bone, starting pose, starting frame.
     pub extras: Vec<(BoneId, Xf, Xf)>,
+    /// Slows the drag down behind the mouse. Only G and R set these, so a handle
+    /// stays under the mouse.
+    pub weights: Weights,
 }
 
 impl Session {
@@ -132,7 +152,13 @@ impl Session {
             current: frame,
             origin: frame,
             extras: Vec::new(),
+            weights: Weights::default(),
         }
+    }
+
+    pub fn with_weights(mut self, weights: Weights) -> Self {
+        self.weights = weights;
+        self
     }
 
     /// Adds other selected bones to the drag. A bone whose parent is also moving
@@ -173,6 +199,7 @@ impl Session {
             OpKind::Move => {
                 let start = camera.screen_ray(self.start_mouse, rect);
                 let now = camera.screen_ray(mouse, rect);
+                let follow = follow(self.weights.grab);
                 self.offset = match self.lock {
                     Some(lock) => {
                         let dir = self.axis_dir(lock);
@@ -180,14 +207,14 @@ impl Session {
                             closest_on_line(pivot, dir, start.origin, start.dir),
                             closest_on_line(pivot, dir, now.origin, now.dir),
                         ) {
-                            (Some(a), Some(b)) => dir * (b - a).clamp(-5000.0, 5000.0),
+                            (Some(a), Some(b)) => dir * ((b - a) * follow).clamp(-5000.0, 5000.0),
                             _ => self.offset,
                         }
                     }
                     None => {
                         let n = camera.to_camera();
                         match (ray_plane(start, pivot, n), ray_plane(now, pivot, n)) {
-                            (Some(a), Some(b)) => b - a,
+                            (Some(a), Some(b)) => (b - a) * follow,
                             _ => self.offset,
                         }
                     }
@@ -198,7 +225,7 @@ impl Session {
                 // Rolls the bone like a ball under the cursor, going by how far the mouse is
                 // from where it began. Adding up each step instead leaves a twist behind
                 // after a circle, so bringing the mouse back wouldn't bring the bone back.
-                let d = (mouse - self.start_mouse) * TRACKBALL_SPEED;
+                let d = (mouse - self.start_mouse) * TRACKBALL_SPEED * follow(self.weights.free_rotate);
                 let turn = Quat::from_scaled_axis(camera.up() * d.x + camera.right() * d.y);
                 Xf::new((turn * self.start_frame.rot).normalize(), pivot)
             }
@@ -218,7 +245,8 @@ impl Session {
                     step += TAU;
                 }
                 self.last_angle = screen_angle;
-                self.angle += step;
+                // Kept as the turn the bone makes, so the readout shows what it did.
+                self.angle += step * follow(self.weights.rotate);
                 let to_camera = camera.to_camera();
                 // Counter-clockwise on screen is positive around an axis aimed at the viewer.
                 let (axis, sign) = match self.lock {

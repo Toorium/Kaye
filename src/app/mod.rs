@@ -936,13 +936,29 @@ impl KayeApp {
         self.pause();
         let bone = modifiers::control_of(&self.scene, bone);
         let selected = self.controlled_bones();
-        self.session = Some(Session::new(&self.scene, bone, op, lock, modal, mouse).with_extras(&self.scene, &selected));
+        let weights = self.drag_weights(modal);
+        self.session = Some(Session::new(&self.scene, bone, op, lock, modal, mouse).with_extras(&self.scene, &selected).with_weights(weights));
     }
 
     /// Starts a drag of a whole rig, which is left out of the animation.
     pub fn start_rig_session(&mut self, rig: RigId, op: OpKind, lock: Option<crate::gizmo::AxisLock>, modal: bool, mouse: egui::Pos2) {
         self.pause();
-        self.session = Some(Session::for_rig(&self.scene, rig, op, lock, modal, mouse));
+        let weights = self.drag_weights(modal);
+        self.session = Some(Session::for_rig(&self.scene, rig, op, lock, modal, mouse).with_weights(weights));
+    }
+
+    /// The weights from Preferences, for G and R. A handle drag keeps the handle under
+    /// the mouse, so it has none.
+    fn drag_weights(&self, modal: bool) -> crate::gizmo::Weights {
+        let s = &self.settings.animation;
+        if !modal {
+            return crate::gizmo::Weights::default();
+        }
+        crate::gizmo::Weights {
+            grab: s.grab_weight,
+            rotate: s.rotate_weight,
+            free_rotate: s.free_rotate_weight,
+        }
     }
 
     /// The selected bones, with any under IK swapped for their targets.

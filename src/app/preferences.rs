@@ -162,6 +162,18 @@ fn slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclu
     });
 }
 
+/// A weight from 0 to `MAX_WEIGHT`, shown as a percentage.
+fn weight(ui: &mut Ui, label: &str, value: &mut f32) {
+    row(ui, label, |ui| {
+        ui.spacing_mut().slider_width = FIELD_WIDTH - 54.0;
+        ui.add(
+            Slider::new(value, 0.0..=crate::gizmo::MAX_WEIGHT)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        );
+    });
+}
+
 fn toggle(ui: &mut Ui, label: &str, value: &mut bool) {
     row(ui, label, |ui| {
         ui.checkbox(value, "");
@@ -367,11 +379,18 @@ fn lighting(app: &mut KayeApp, ui: &mut Ui) {
 }
 
 fn animation(app: &mut KayeApp, ui: &mut Ui) {
+    // Named by their keys, which can be changed in the Keymap.
+    let grab = app.settings.keys.get(Action::Grab);
+    let rotate = app.settings.keys.get(Action::Rotate);
     let s = &mut app.settings.animation;
     heading(ui, "Keyframes");
     toggle(ui, "Auto Key", &mut s.auto_key);
     toggle(ui, "Key Start Pose on First Edit", &mut s.key_start_pose);
     toggle(ui, "Only Insert Needed", &mut s.only_insert_needed);
+    heading(ui, "Posing Weight");
+    weight(ui, &format!("Grab ({grab})"), &mut s.grab_weight);
+    weight(ui, &format!("Rotate ({rotate})"), &mut s.rotate_weight);
+    weight(ui, &format!("Free Rotate ({rotate} {rotate})"), &mut s.free_rotate_weight);
     heading(ui, "Curves");
     row(ui, "Default Interpolation", |ui| {
         ComboBox::from_id_salt("default_style")

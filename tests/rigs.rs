@@ -5,7 +5,7 @@ use std::path::Path;
 use glam::{Quat, Vec3};
 use kaye::animation::Animation;
 use kaye::camera::OrbitCamera;
-use kaye::gizmo::{OpKind, Session};
+use kaye::gizmo::{AxisLock, MAX_WEIGHT, OpKind, Session, Space, Weights};
 use kaye::history::{History, PoseChange};
 use kaye::import::{import_bytes, import_file};
 use kaye::math::Xf;
@@ -286,3 +286,68 @@ fn a_selected_child_follows_its_parent_instead_of_moving_twice() {
     assert!(session.extras.is_empty());
 }
 
+/// Runs one G or R drag on the right elbow, a quarter turn around it on screen, and
+/// gives back where the bone began and ended.
+fn drag_with(weights: Weights, op: OpKind, lock: Option<AxisLock>, trackball: bool) -> (Xf, Xf, Session) {
+    let mut s = load("R15Rig.rbxm");
+    let elbow = bone(&s, "RightElbow");
+    let before = s.bones[elbow].frame;
+    let mut camera = OrbitCamera::default();
+    camera.target = before.pos;
+    let center = camera.world_to_screen(before.pos, test_rect()).unwrap();
+    let start = center + egui::vec2(120.0, 0.0);
+    let mut session = Session::new(&s, elbow, op, lock, true, start).with_weights(weights);
+    if trackball {
+        session.press_rotate();
+    }
+    session.update(&mut s, &camera, test_rect(), center + egui::vec2(0.0, -120.0));
+    (before, s.bones[elbow].frame, session)
+}
+
+fn turn(before: Xf, after: Xf) -> f32 {
+    before.rot.angle_between(after.rot)
+}
+
+#[test]
+fn grab_weight_moves_a_bone_part_of_the_way() {
+    let half = Weights { grab: 0.5, ..Weights::default() };
+    for lock in [None, Some(AxisLock { axis: 0, space: Space::Global })] {
+        let (before, full, _) = drag_with(Weights::default(), OpKind::Move, lock, false);
+        let (_, weighted, session) = drag_with(half, OpKind::Move, lock, false);
+        let (full, weighted) = (full.pos - before.pos, weighted.pos - before.pos);
+        assert!(full.length() > 0.5, "the drag moved the bone {full}");
+        assert!(weighted.distance(full * 0.5) < 1e-3, "{lock:?}: {weighted} is not half of {full}");
+        assert!((session.offset.length() - weighted.length()).abs() < 1e-3, "the readout shows the real move");
+    }
+}
+
+#[test]
+fn rotate_weights_turn_a_bone_part_of_the_way() {
+    let quarter = Weights { rotate: 0.75, free_rotate: 0.75, ..Weights::default() };
+    for trackball in [false, true] {
+        let (before, full, _) = drag_with(Weights::default(), OpKind::Rotate, None, trackball);
+        let (_, weighted, session) = drag_with(quarter, OpKind::Rotate, None, trackball);
+        let (full, weighted) = (turn(before, full), turn(before, weighted));
+        assert!(full > 0.1, "the drag turned the bone {full}");
+        assert!((weighted - full * 0.25).abs() < 2e-3, "trackball {trackball}: {weighted} is not a quarter of {full}");
+        if !trackball {
+            assert!((session.angle.abs() - weighted).abs() < 2e-3, "the readout shows the real turn");
+        }
+    }
+}
+
+#[test]
+fn each_weight_only_slows_its_own_drag() {
+    let grab_only = Weights { grab: 0.9, ..Weights::default() };
+    let (before, full, _) = drag_with(Weights::default(), OpKind::Rotate, None, false);
+    let (_, same, _) = drag_with(grab_only, OpKind::Rotate, None, false);
+    assert!((turn(before, full) - turn(before, same)).abs() < 2e-3);
+}
+
+#[test]
+fn a_full_weight_still_lets_a_bone_move() {
+    let (before, full, _) = drag_with(Weights::default(), OpKind::Move, None, false);
+    let (_, heaviest, _) = drag_with(Weights { grab: 5.0, ..Weights::default() }, OpKind::Move, None, false);
+    let (full, heaviest) = ((full.pos - before.pos).length(), (heaviest.pos - before.pos).length());
+    assert!((heaviest - full * (1.0 - MAX_WEIGHT)).abs() < 1e-3, "{heaviest} against {full}");
+}
