@@ -42,9 +42,9 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 
 **Rigs from Studio**
 
-- Opens `.rbxm` and `.rbxmx` files: R6, R15, Rthro, custom Motor6D rigs and skinned rigs
+- Opens `.rbxm` and `.rbxmx` files: R6, R15, Rthro, custom Motor6D rigs and skinned rigs, with their hats and other accessories attached
 - Brings in animations already saved in a rig's `AnimSaves`
-- Shows real meshes and textures once you give it a Roblox Open Cloud key, and Roblox's own materials with no key at all
+- Shows real meshes, textures and clothing once you give it a Roblox Open Cloud key, and Roblox's own materials with no key at all
 
 **Posing**
 
@@ -89,7 +89,7 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 
 ## Performance
 
-Kaye is light enough for any PC. On a laptop with integrated graphics and 8 GB of memory it averaged **120 fps with no lag**.
+Kaye is light enough for any PC. On an ASUS Vivobook 15 OLED laptop with a Core i3, Intel UHD integrated graphics and 8 GB of memory, it averaged **120 fps with no lag**.
 
 - Draws its first frame 0.22 seconds after it starts
 - Uses about 150 MB of memory with a rig open
@@ -114,30 +114,30 @@ A 60 Hz screen needs a frame every 16.7 ms, so one rig uses about a sixteenth of
 
 ### Other hardware
 
-These are predictions, worked out from the measurements above. The graphics card only spends 0.1 to 0.5 ms on each frame here. The rest is one CPU core running the interface. So each frame is split into a CPU part, scaled by the CPU's single-core speed (its Cinebench R23 single-core score), and a GPU part, scaled by the card's speed (3DMark Time Spy graphics score):
+These are predictions, worked out from the measurements above. The graphics card only spends up to about 0.5 ms on each frame here. The rest is one CPU core running the interface. So each frame is split into a CPU part, scaled by the CPU's single-core speed (its Cinebench R23 single-core score), and a GPU part, scaled by the card's speed (3DMark Time Spy graphics score):
 
 ```text
 frame time = CPU part × (1700 ÷ your CPU's score) + GPU part × (12,500 ÷ your GPU's score)
 fps        = 1000 ÷ frame time
 ```
 
-1700 and 12,500 are the i5-12400F and Arc B570. The model predicts about 100 fps for a common integrated-graphics laptop, and the real one measured 120, so it's on the cautious side.
+1700 and 12,500 are the i5-12400F and Arc B570. The GPU part is set to 0.5 ms, the top of what was measured, which brings the Vivobook's Core i3 with Intel UHD to about 130 fps against the 120 it really measured. That run was before later speedups, so Kaye has likely got faster on it since.
 
 | Hardware | One rig, IK, playing | Graph Editor open | 10 rigs with IK |
 | --- | --- | --- | --- |
-| Core i7-14700K + RTX 4090 | ~1,490 | ~470 | ~870 |
-| Ryzen 7 7800X3D + RTX 4070 | ~1,150 | ~390 | ~680 |
+| Core i7-14700K + RTX 4090 | ~1,730 | ~490 | ~930 |
+| Ryzen 7 7800X3D + RTX 4070 | ~1,210 | ~390 | ~700 |
 | **Core i5-12400F + Arc B570 (measured)** | **964** | **~360** | **~600** |
-| Ryzen 5 5600 + RTX 3060 | ~820 | ~310 | ~490 |
-| Ryzen 7 7840U, Radeon 780M (laptop) | ~500 | ~260 | ~320 |
-| Core i3-10100 + GTX 1650 | ~480 | ~220 | ~300 |
-| Core i5-1135G7, Iris Xe (laptop) | ~330 | ~190 | ~210 |
-| Core i3-1115G4, Intel UHD (laptop) | ~200 | ~130 | ~130 |
-| Ryzen 5 3500U, Vega 8 (laptop) | ~200 | ~120 | ~130 |
-| Core i5-8250U, UHD 620 (laptop) | ~100 | ~80 | ~70 |
-| Celeron N4020, UHD 600 | ~50 | ~30 | ~30 |
+| Ryzen 5 5600 + RTX 3060 | ~780 | ~300 | ~480 |
+| Core i3-10100 + GTX 1650 | ~400 | ~200 | ~270 |
+| Ryzen 7 7840U, Radeon 780M (laptop) | ~380 | ~220 | ~270 |
+| Core i5-1135G7, Iris Xe (laptop) | ~230 | ~150 | ~170 |
+| Ryzen 5 3500U, Vega 8 (laptop) | ~140 | ~90 | ~100 |
+| **Core i3, Intel UHD (Vivobook 15 OLED, measured 120)** | **~130** | **~100** | **~100** |
+| Core i5-8250U, UHD 620 (laptop) | ~70 | ~50 | ~50 |
+| Celeron N4020, UHD 600 | ~30 | ~20 | ~20 |
 
-With vsync on, which is the default, Kaye stops at your screen's refresh rate, so anything above 60 on a 60 Hz screen just means room to spare. Only the last row would dip below a 60 Hz screen, and even it stays usable for posing.
+With vsync on, which is the default, Kaye stops at your screen's refresh rate, so anything above 60 on a 60 Hz screen just means room to spare. Only the oldest laptops at the bottom dip below a 60 Hz screen, and they stay usable for posing.
 
 ## Download
 
@@ -200,7 +200,6 @@ powershell -ExecutionPolicy Bypass -File scripts\publish-update.ps1 -Notes "What
 Kaye is early. Releases are test builds, and things will break. If something does, an [issue](https://github.com/Toorium/Kaye/issues) with the `.rbxm` you used helps the most.
 
 - Windows only for now. Mac and Linux builds have never been tried.
-- On some rigs, shirts and pants don't show and hats don't follow the head. That's being fixed.
 - Exported animations haven't all been checked in Studio yet, and a camera's animated field of view doesn't export.
 - Decals only show on plain blocks, and ragdolls don't collide with themselves.
 
