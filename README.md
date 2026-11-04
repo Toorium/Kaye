@@ -76,7 +76,7 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/images/graph.png" alt="The Graph Editor showing a shoulder's rotation curve"></td>
+    <td width="33%"><img src="docs/images/graph.png" alt="The Graph Editor with an avatar's rotation and position curves, and onion skins in the view above"></td>
     <td width="33%"><img src="docs/images/avatar-onion.png" alt="An onion skin in green over a real avatar with accessories, clothing and a body package"></td>
     <td width="33%"><img src="docs/images/materials.jpg" alt="Blocks in Roblox's materials on a Baseplate"></td>
   </tr>
