@@ -77,7 +77,7 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 <table>
   <tr>
     <td width="33%"><img src="docs/images/graph.png" alt="The Graph Editor showing a shoulder's rotation curve"></td>
-    <td width="33%"><img src="docs/images/onion.png" alt="Onion skins in red behind and green ahead of a running rig"></td>
+    <td width="33%"><img src="docs/images/avatar-onion.png" alt="An onion skin in green over a real avatar with accessories, clothing and a body package"></td>
     <td width="33%"><img src="docs/images/materials.jpg" alt="Blocks in Roblox's materials on a Baseplate"></td>
   </tr>
   <tr>
@@ -85,13 +85,14 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
     <td align="center">Onion skins</td>
     <td align="center">Roblox materials</td>
   </tr>
+</table>
+
+<table>
   <tr>
-    <td width="33%"><img src="docs/images/avatar-onion.png" alt="An onion skin in green over a real avatar with accessories, clothing and a body package"></td>
-    <td width="33%"><img src="docs/images/avatar-shaded.png" alt="The same avatar in Shaded mode, with soft lighting and the bones hidden"></td>
-    <td width="33%"><img src="docs/images/avatar-studio.png" alt="The same avatar in Studio mode, lit like Roblox Studio, with its bones showing"></td>
+    <td width="50%"><img src="docs/images/avatar-shaded.png" alt="A real avatar in Shaded mode, with soft lighting and the bones hidden"></td>
+    <td width="50%"><img src="docs/images/avatar-studio.png" alt="The same avatar in Studio mode, lit like Roblox Studio, with its bones showing"></td>
   </tr>
   <tr>
-    <td align="center">Onion skin on a real avatar</td>
     <td align="center">Shaded mode</td>
     <td align="center">Studio mode</td>
   </tr>
