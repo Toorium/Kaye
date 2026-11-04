@@ -1,12 +1,12 @@
 {
-    "version":  "0.1.1",
-    "notes":  "The first release on GitHub. Kaye now tells you when a new version is out, and updates itself when you click Update.",
+    "version":  "0.1.2",
+    "notes":  "Hats and other accessories now stay attached and move with the limb that holds them, and shirts and pants show over body textures. Existing projects get their accessories attached when opened.",
     "files":  [
                   {
                       "path":  "kaye.exe",
-                      "size":  42158592,
-                      "sha256":  "655c68ed5877e03bd19128af41686884d2a4129246dbb19020d2db4fa82f21da",
-                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.1/kaye.exe"
+                      "size":  42177024,
+                      "sha256":  "976f7bba7e621000d00681c891ae65e2a59c4d693ae96e924abffca1be8d16b4",
+                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.2/kaye.exe"
                   }
               ]
 }
