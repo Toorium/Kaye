@@ -1,7 +1,7 @@
 <div align="center">
   <img src="docs/images/logo.png" alt="Kaye logo" width="128" height="128">
   <h1>Kaye</h1>
-  <p>A Blender-style animation tool for Roblox rigs</p>
+  <p>A Blender-style animation tool for Roblox</p>
   <p>
     <a href="https://github.com/Toorium/Kaye/releases/latest"><img src="https://img.shields.io/github/v/release/Toorium/Kaye?label=release&color=F36B70" alt="Latest release"></a>
     <a href="https://github.com/Toorium/Kaye/releases"><img src="https://img.shields.io/github/downloads/Toorium/Kaye/total?color=F36B70" alt="Downloads"></a>
