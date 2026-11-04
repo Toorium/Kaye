@@ -1,12 +1,12 @@
 {
-    "version":  "0.1.2",
-    "notes":  "Hats and other accessories now stay attached and move with the limb that holds them, and shirts and pants show over body textures. Existing projects get their accessories attached when opened.",
+    "version":  "0.1.3",
+    "notes":  "New Posing Weight in Preferences \u003e Animation. Grab (G), Rotate (R) and Free Rotate (R R) can each move a bone less than the mouse does, from 0% (exactly with it) to 95%. At 50% it goes half as far.",
     "files":  [
                   {
                       "path":  "kaye.exe",
-                      "size":  42177024,
-                      "sha256":  "976f7bba7e621000d00681c891ae65e2a59c4d693ae96e924abffca1be8d16b4",
-                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.2/kaye.exe"
+                      "size":  42185728,
+                      "sha256":  "762d780ca44cf8e7ae46122e56d5acbf3187f88d6332208f1682909fb531b626",
+                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.3/kaye.exe"
                   }
               ]
 }
