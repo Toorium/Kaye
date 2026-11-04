@@ -6,7 +6,9 @@ This version imports `.rbxm` and `.rbxmx` models along with any animations saved
 
 ## Installing
 
-Download `Kaye-<version>.msi` from [Releases](https://github.com/Toorium/Kaye/releases) and run it. It installs for the current user, in `%LOCALAPPDATA%\Programs\Kaye`, with no administrator needed.
+Download `Kaye-<version>.msi` from the [latest release](https://github.com/Toorium/Kaye/releases/latest) and run it. Nothing needs building. It installs for the current user, in `%LOCALAPPDATA%\Programs\Kaye`, with no administrator needed. Windows may warn that it's from an unknown publisher, since it isn't signed: click **More info**, then **Run anyway**.
+
+`kaye.exe` on the same page is the whole program on its own, if you'd rather not install it.
 
 From 0.1.1 on, Kaye checks [`latest.json`](latest.json) when it starts. If a newer version is out, it shows **New update** with **Update** and **Later**. Update closes Kaye, downloads only the files that changed, checks each one's SHA-256, swaps them in and opens Kaye again. Settings, the API key and backups in `%APPDATA%\Kaye` aren't touched.
 

@@ -117,6 +117,23 @@ fn the_published_list_reads() {
     assert_eq!(release.files[0].size, 123);
 }
 
+/// Downloads everything GitHub's `latest.json` lists right now, through GitHub's own redirects,
+/// and checks every hash. Nothing is installed. It needs the internet, so it only runs when
+/// asked: `cargo test --test update -- --ignored`
+#[test]
+#[ignore]
+fn the_published_release_downloads() {
+    let release = update::fetch_latest(update::LATEST_URL).unwrap();
+    let dir = folder("github");
+    let plan = update::plan(&dir, &release).unwrap();
+    assert_eq!(plan.fetch.len(), release.files.len());
+    let progress = Progress::default();
+    update::download(&plan, &dir, &progress).unwrap();
+    assert_eq!(progress.done.load(std::sync::atomic::Ordering::SeqCst), plan.download_size());
+    println!("Kaye {} downloads from GitHub: {} files, {} bytes", release.version, release.files.len(), plan.download_size());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_bad_release_is_refused() {
     let base = serve(HashMap::from([
