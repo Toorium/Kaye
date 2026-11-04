@@ -38,14 +38,6 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 | Window open in | Under a second | Several seconds |
 | Runs smoothly on a laptop with integrated graphics | Yes, 120 fps average | Struggles with heavy scenes |
 
-### Light enough for any PC
-
-Kaye was tested on a laptop with integrated graphics and 8 GB of memory, where it averaged **120 fps with no lag**. On a desktop, one rig takes about 1 ms of each frame, with room for 50 rigs with IK on every limb still above 160 fps.
-
-- Draws its first frame 0.22 seconds after it starts
-- Uses about 150 MB of memory with a rig open
-- Uses no CPU at all while you're not touching it, so it won't drain a laptop's battery in the background
-
 ## Features
 
 **Rigs from Studio**
@@ -94,6 +86,58 @@ Kaye was tested on a laptop with integrated graphics and 8 GB of memory, where i
     <td align="center">Roblox materials</td>
   </tr>
 </table>
+
+## Performance
+
+Kaye is light enough for any PC. On a laptop with integrated graphics and 8 GB of memory it averaged **120 fps with no lag**.
+
+- Draws its first frame 0.22 seconds after it starts
+- Uses about 150 MB of memory with a rig open
+- Uses no CPU at all while you're not touching it, so it won't drain a laptop's battery in the background
+
+### Measured
+
+On the development PC: an Intel Core i5-12400F, Intel Arc B570 and 16 GB of memory, at 1600 by 900 with vsync off so nothing caps the number.
+
+| What's on screen | FPS | Frame time |
+| --- | --- | --- |
+| R15 rig sitting still | 1,218 | 0.78 ms |
+| R15 rig, Shaded lighting with shadows | 1,044 | 0.91 ms |
+| R15 rig playing, IK on all four limbs | 964 | 1.00 ms |
+| R15 rig playing, 120 keys per bone | 492 | 1.87 ms |
+| Graph Editor open, playing 120 keys | 278 | 3.40 ms |
+| 20 rigs playing, IK and poles on every limb | 333 | 2.79 ms |
+| 50 rigs playing, IK and poles on every limb | 165 | 5.90 ms |
+| 10,000 parts, Workspace open | 408 | 2.26 ms |
+
+A 60 Hz screen needs a frame every 16.7 ms, so one rig uses about a sixteenth of that. Idle, Kaye drew 2 frames in 10 seconds. Over a minute of playback, memory moved by under 1 MB.
+
+### Other hardware
+
+These are predictions, worked out from the measurements above. The graphics card only spends 0.1 to 0.5 ms on each frame here. The rest is one CPU core running the interface. So each frame is split into a CPU part, scaled by the CPU's single-core speed (its Cinebench R23 single-core score), and a GPU part, scaled by the card's speed (3DMark Time Spy graphics score):
+
+```text
+frame time = CPU part × (1700 ÷ your CPU's score) + GPU part × (12,500 ÷ your GPU's score)
+fps        = 1000 ÷ frame time
+```
+
+1700 and 12,500 are the i5-12400F and Arc B570. The model predicts about 100 fps for a common integrated-graphics laptop, and the real one measured 120, so it's on the cautious side.
+
+| Hardware | One rig, IK, playing | Graph Editor open | 10 rigs with IK |
+| --- | --- | --- | --- |
+| Core i7-14700K + RTX 4090 | ~1,490 | ~470 | ~870 |
+| Ryzen 7 7800X3D + RTX 4070 | ~1,150 | ~390 | ~680 |
+| **Core i5-12400F + Arc B570 (measured)** | **964** | **~360** | **~600** |
+| Ryzen 5 5600 + RTX 3060 | ~820 | ~310 | ~490 |
+| Ryzen 7 7840U, Radeon 780M (laptop) | ~500 | ~260 | ~320 |
+| Core i3-10100 + GTX 1650 | ~480 | ~220 | ~300 |
+| Core i5-1135G7, Iris Xe (laptop) | ~330 | ~190 | ~210 |
+| Core i3-1115G4, Intel UHD (laptop) | ~200 | ~130 | ~130 |
+| Ryzen 5 3500U, Vega 8 (laptop) | ~200 | ~120 | ~130 |
+| Core i5-8250U, UHD 620 (laptop) | ~100 | ~80 | ~70 |
+| Celeron N4020, UHD 600 | ~50 | ~30 | ~30 |
+
+With vsync on, which is the default, Kaye stops at your screen's refresh rate, so anything above 60 on a 60 Hz screen just means room to spare. Only the last row would dip below a 60 Hz screen, and even it stays usable for posing.
 
 ## Download
 
