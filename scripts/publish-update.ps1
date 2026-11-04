@@ -46,7 +46,15 @@ if ((git -C $project rev-parse --abbrev-ref HEAD).Trim() -ne 'main') {
 
 # Windows PowerShell 5 doesn't offer TLS 1.2 by itself, and GitHub needs it.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Some shells pipe text to programs with a UTF-8 byte order mark first, which git then reads as
+# part of "protocol" and refuses. Plain UTF-8 is used for this one pipe, then put back.
+$plain = New-Object Text.UTF8Encoding $false
+$before = $OutputEncoding, [Console]::InputEncoding
+$OutputEncoding = $plain
+try { [Console]::InputEncoding = $plain } catch {}
 $credential = "protocol=https`nhost=github.com`n`n" | git credential fill
+$OutputEncoding = $before[0]
+try { [Console]::InputEncoding = $before[1] } catch {}
 $token = ($credential | Where-Object { $_ -like 'password=*' } | Select-Object -First 1) -replace '^password=', ''
 if (-not $token) { throw 'No GitHub sign-in was found. Run git push once and sign in, then try again.' }
 $headers = @{
