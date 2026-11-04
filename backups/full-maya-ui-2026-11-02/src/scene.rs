@@ -1,0 +1,635 @@
+//! The in-memory rig document: parts, bones and how a pose moves them.
+//!
+//! Roblox joints follow `Part1 = Part0 * C0 * Transform * C1:Inverse()`, and
+//! skinned bones follow `Bone = Parent * CFrame * Transform`. `Bone::pose` is
+//! that `Transform`, the only thing an animation changes. It is what keyframes
+//! store. Modifiers run on top of it, see `modifiers.rs`.
+//!
+//! Cameras and IK targets are bones too, with no joint. Being bones means selecting,
+//! moving, keying, undo and the Graph tab all work on them with no extra code.
+//! Anything that means a real joint checks `BoneKind::is_joint`.
+
+use glam::Vec3;
+use serde::{Deserialize, Serialize};
+
+use crate::math::Xf;
+use crate::modifiers::{self, Modifier, ModifierKind};
+
+pub type PartId = usize;
+pub type BoneId = usize;
+pub type RigId = usize;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PartShape {
+    Block,
+    Ball,
+    Cylinder,
+    Wedge,
+    CornerWedge,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Part {
+    pub name: String,
+    pub class: String,
+    pub rig: RigId,
+    pub size: Vec3,
+    pub color: [f32; 3],
+    pub transparency: f32,
+    pub shape: PartShape,
+    /// Asset references kept for when real meshes and textures are downloaded.
+    pub mesh_asset: Option<String>,
+    pub texture_asset: Option<String>,
+    pub file_cframe: Xf,
+    #[serde(skip)]
+    pub world: Xf,
+    pub drive: Drive,
+    pub visible: bool,
+}
+
+impl Part {
+    /// Fully transparent parts such as HumanoidRootPart are helpers, not visuals.
+    pub fn is_helper(&self) -> bool {
+        self.transparency >= 0.999
+    }
+}
+
+/// What positions a part each time the pose is evaluated.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Drive {
+    /// Not attached to anything earlier in the rig; stays at its file position.
+    Root,
+    /// Part1 of this bone's joint.
+    Bone(BoneId),
+    /// Rigidly attached through a Weld, WeldConstraint and so on.
+    Rigid { parent: PartId, offset: Xf },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoneKind {
+    Motor6D,
+    LegacyMotor,
+    AnimationConstraint,
+    Skinned,
+    Camera,
+    IkTarget,
+    IkPole,
+}
+
+impl BoneKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            BoneKind::Motor6D => "Motor6D",
+            BoneKind::LegacyMotor => "Motor",
+            BoneKind::AnimationConstraint => "AnimationConstraint",
+            BoneKind::Skinned => "Bone",
+            BoneKind::Camera => "Camera",
+            BoneKind::IkTarget => "IK Target",
+            BoneKind::IkPole => "IK Pole",
+        }
+    }
+
+    /// A real joint in the rig, as opposed to something Kaye added around it.
+    pub fn is_joint(self) -> bool {
+        !matches!(self, BoneKind::Camera | BoneKind::IkTarget | BoneKind::IkPole)
+    }
+
+    pub fn is_control(self) -> bool {
+        matches!(self, BoneKind::IkTarget | BoneKind::IkPole)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum BoneLink {
+    Joint {
+        part0: PartId,
+        part1: PartId,
+        c0: Xf,
+        c1: Xf,
+    },
+    Skinned {
+        parent_part: Option<PartId>,
+        parent_bone: Option<BoneId>,
+        local: Xf,
+    },
+    /// Cameras and IK controls, which hang from nothing unless told to follow a bone.
+    /// `rest` is relative to that bone when there is one.
+    Free { rest: Xf, follow: Option<BoneId> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Bone {
+    pub name: String,
+    pub kind: BoneKind,
+    pub rig: RigId,
+    pub link: BoneLink,
+    pub parent: Option<BoneId>,
+    pub children: Vec<BoneId>,
+    /// The animated Transform, relative to `base`.
+    pub pose: Xf,
+    /// `pose` after IK. This is what actually places the bone.
+    #[serde(skip)]
+    pub solved: Xf,
+    /// One extra animated number: a camera's field of view, an IK target's
+    /// influence, or an Unparent modifier's influence.
+    pub value: f32,
+    /// World frame with no pose applied. Depends only on the bone's ancestors,
+    /// and on an Unparent modifier if it has one.
+    #[serde(skip)]
+    pub base: Xf,
+    /// Where the joint itself would put `base`, ignoring Unparent.
+    #[serde(skip)]
+    pub joint_base: Xf,
+    /// World frame with the pose applied. Its origin is the pivot.
+    #[serde(skip)]
+    pub frame: Xf,
+    /// Where the drawn bone ends, in `frame` space.
+    pub tail_local: Vec3,
+    /// The drawn line to the parent attaches at its tail, not its head. Decided
+    /// once at rest, so posing can't make the line jump between the two.
+    pub link_to_parent_tail: bool,
+    /// Taken out of the scene. Ids have to stay stable and undo can bring it back,
+    /// so it stays in the list.
+    pub removed: bool,
+    /// Has an Unparent modifier. Set by `evaluate`, so placing a bone without one
+    /// doesn't have to look through every modifier.
+    #[serde(skip)]
+    pub(crate) unparented: bool,
+}
+
+impl Bone {
+    pub fn new(name: String, kind: BoneKind, link: BoneLink, parent: Option<BoneId>) -> Self {
+        Self {
+            name,
+            kind,
+            rig: 0,
+            link,
+            parent,
+            children: Vec::new(),
+            pose: Xf::IDENTITY,
+            solved: Xf::IDENTITY,
+            value: 1.0,
+            base: Xf::IDENTITY,
+            joint_base: Xf::IDENTITY,
+            frame: Xf::IDENTITY,
+            tail_local: Vec3::Y,
+            link_to_parent_tail: true,
+            removed: false,
+            unparented: false,
+        }
+    }
+
+    pub fn head(&self) -> Vec3 {
+        self.frame.pos
+    }
+
+    pub fn tail(&self) -> Vec3 {
+        self.frame.point(self.tail_local)
+    }
+
+    /// The Transform Roblox needs on the real joint to put the bone where modifiers
+    /// did. An export has to write this, not `pose`.
+    pub fn output(&self) -> Xf {
+        self.joint_base.inverse() * self.frame
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RigKind {
+    R6,
+    R15,
+    Rthro,
+    Skinned,
+    Custom,
+    Static,
+    /// Holds one camera, which the outliner shows as a single row.
+    Camera,
+}
+
+impl RigKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            RigKind::R6 => "R6",
+            RigKind::R15 => "R15",
+            RigKind::Rthro => "Rthro",
+            RigKind::Skinned => "Skinned",
+            RigKind::Custom => "Custom rig",
+            RigKind::Static => "Static model",
+            RigKind::Camera => "Camera",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Rig {
+    pub name: String,
+    pub kind: RigKind,
+    pub source_file: String,
+    pub parts: Vec<PartId>,
+    pub bones: Vec<BoneId>,
+    pub visible: bool,
+}
+
+/// Everything undo has to put back that isn't a pose or a key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RigState {
+    modifiers: Vec<Modifier>,
+    values: Vec<f32>,
+    removed: Vec<bool>,
+    links: Vec<BoneLink>,
+}
+
+/// The order to place some of a scene in. Parents always come before children.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Placement {
+    free: Vec<BoneId>,
+    parts: Vec<PartId>,
+    skinned: Vec<BoneId>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Scene {
+    pub parts: Vec<Part>,
+    pub bones: Vec<Bone>,
+    pub rigs: Vec<Rig>,
+    /// Parents always come before children.
+    pub part_order: Vec<PartId>,
+    pub skinned_order: Vec<BoneId>,
+    /// Cameras and IK targets, placed first because nothing moves them.
+    pub free_order: Vec<BoneId>,
+    pub modifiers: Vec<Modifier>,
+}
+
+impl Scene {
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty() && !self.bones.iter().any(|b| b.kind.is_joint())
+    }
+
+    /// Recomputes every world transform from the current poses, then runs modifiers.
+    pub fn evaluate(&mut self) {
+        for bone in &mut self.bones {
+            bone.solved = bone.pose;
+            bone.unparented = false;
+        }
+        for modifier in &self.modifiers {
+            if matches!(modifier.kind, ModifierKind::Unparent(_)) {
+                self.bones[modifier.bone].unparented = true;
+            }
+        }
+        self.place_all();
+        // An Unparent anchor can sit later in the order than the bone that uses it.
+        if modifiers::has_anchors(self) {
+            self.place_all();
+        }
+        modifiers::solve(self);
+    }
+
+    /// Works out every world transform from `Bone::solved`.
+    pub(crate) fn place_all(&mut self) {
+        let order = Placement {
+            free: std::mem::take(&mut self.free_order),
+            parts: std::mem::take(&mut self.part_order),
+            skinned: std::mem::take(&mut self.skinned_order),
+        };
+        self.place(&order);
+        self.free_order = order.free;
+        self.part_order = order.parts;
+        self.skinned_order = order.skinned;
+    }
+
+    /// Each rig's own placing order. Placing just one rig only gives the right answer
+    /// when nothing in another rig hangs from it, see `modifiers::crosses_rigs`.
+    pub(crate) fn rig_placements(&self) -> Vec<Placement> {
+        let mut rigs = vec![Placement::default(); self.rigs.len()];
+        for id in &self.free_order {
+            rigs[self.bones[*id].rig].free.push(*id);
+        }
+        for id in &self.part_order {
+            rigs[self.parts[*id].rig].parts.push(*id);
+        }
+        for id in &self.skinned_order {
+            rigs[self.bones[*id].rig].skinned.push(*id);
+        }
+        rigs
+    }
+
+    pub(crate) fn place(&mut self, order: &Placement) {
+        for &id in &order.free {
+            if let BoneLink::Free { rest, follow: None } = self.bones[id].link {
+                self.place_bone(id, rest);
+            }
+        }
+        for &id in &order.parts {
+            match self.parts[id].drive {
+                Drive::Root => self.parts[id].world = self.parts[id].file_cframe,
+                Drive::Rigid { parent, offset } => {
+                    self.parts[id].world = self.parts[parent].world * offset;
+                }
+                Drive::Bone(b) => {
+                    let BoneLink::Joint { part0, c0, c1, .. } = self.bones[b].link else {
+                        continue;
+                    };
+                    self.place_bone(b, self.parts[part0].world * c0);
+                    self.parts[id].world = self.bones[b].frame * c1.inverse();
+                }
+            }
+        }
+        for &id in &order.skinned {
+            let BoneLink::Skinned {
+                parent_part,
+                parent_bone,
+                local,
+            } = self.bones[id].link
+            else {
+                continue;
+            };
+            let parent = match (parent_bone, parent_part) {
+                (Some(b), _) => self.bones[b].frame,
+                (None, Some(p)) => self.parts[p].world,
+                (None, None) => Xf::IDENTITY,
+            };
+            self.place_bone(id, parent * local);
+        }
+        // Controls that follow a bone need it placed first.
+        for &id in &order.free {
+            if let BoneLink::Free { rest, follow: Some(bone) } = self.bones[id].link {
+                self.place_bone(id, self.bones[bone].frame * rest);
+            }
+        }
+    }
+
+    fn place_bone(&mut self, id: BoneId, joint_base: Xf) {
+        let base = modifiers::held_base(self, id, joint_base);
+        let bone = &mut self.bones[id];
+        bone.joint_base = joint_base;
+        bone.base = base;
+        bone.frame = base * bone.solved;
+    }
+
+    /// Moves a bone so its world frame becomes `frame`, then re-evaluates.
+    pub fn set_bone_frame(&mut self, bone: BoneId, frame: Xf) {
+        let pose = self.bones[bone].base.inverse() * frame;
+        self.set_bone_pose(bone, pose);
+    }
+
+    pub fn set_bone_pose(&mut self, bone: BoneId, pose: Xf) {
+        self.bones[bone].pose = pose;
+        self.evaluate();
+    }
+
+    /// The bone a part follows, walking up through rigid attachments.
+    pub fn part_owner(&self, mut part: PartId) -> Option<BoneId> {
+        for _ in 0..self.parts.len() + 1 {
+            match self.parts[part].drive {
+                Drive::Root => return None,
+                Drive::Bone(b) => return Some(b),
+                Drive::Rigid { parent, .. } => part = parent,
+            }
+        }
+        None
+    }
+
+    pub fn bone_is_visible(&self, bone: BoneId) -> bool {
+        !self.bones[bone].removed && self.rigs[self.bones[bone].rig].visible
+    }
+
+    /// The bones of a rig that haven't been taken out.
+    pub fn live_bones(&self, rig: RigId) -> Vec<BoneId> {
+        self.rigs[rig].bones.iter().copied().filter(|b| !self.bones[*b].removed).collect()
+    }
+
+    /// The rig's real joints, leaving out the targets Kaye added.
+    pub fn joints(&self, rig: RigId) -> Vec<BoneId> {
+        self.live_bones(rig).into_iter().filter(|b| self.bones[*b].kind.is_joint()).collect()
+    }
+
+    /// Every camera still in the scene.
+    pub fn cameras(&self) -> impl Iterator<Item = BoneId> + '_ {
+        (0..self.bones.len()).filter(|b| self.bones[*b].kind == BoneKind::Camera && !self.bones[*b].removed)
+    }
+
+    /// Adds something with no joint to a rig. `rest` is where it sits with no pose.
+    pub fn add_control(&mut self, name: String, kind: BoneKind, rig: RigId, rest: Xf, value: f32) -> BoneId {
+        let id = self.bones.len();
+        let mut bone = Bone::new(name, kind, BoneLink::Free { rest, follow: None }, None);
+        bone.rig = rig;
+        bone.value = value;
+        bone.tail_local = Vec3::ZERO;
+        self.bones.push(bone);
+        self.rigs[rig].bones.push(id);
+        self.free_order.push(id);
+        id
+    }
+
+    /// Adds a camera at `at`. Its pose is its world position, which is what someone
+    /// typing in numbers expects.
+    pub fn add_camera(&mut self, at: Xf, fov: f32) -> BoneId {
+        let number = self.bones.iter().filter(|b| b.kind == BoneKind::Camera).count() + 1;
+        let name = if number == 1 { "Camera".to_string() } else { format!("Camera {number}") };
+        let rig = self.rigs.len();
+        self.rigs.push(Rig {
+            name: name.clone(),
+            kind: RigKind::Camera,
+            source_file: String::new(),
+            parts: Vec::new(),
+            bones: Vec::new(),
+            visible: true,
+        });
+        let id = self.add_control(name, BoneKind::Camera, rig, Xf::IDENTITY, fov);
+        self.bones[id].pose = at;
+        // Picks up along the view line, not just at the lens.
+        self.bones[id].tail_local = Vec3::new(0.0, 0.0, -1.4);
+        id
+    }
+
+    pub fn rig_state(&self) -> RigState {
+        RigState {
+            modifiers: self.modifiers.clone(),
+            values: self.bones.iter().map(|b| b.value).collect(),
+            removed: self.bones.iter().map(|b| b.removed).collect(),
+            links: self.bones.iter().map(|b| b.link).collect(),
+        }
+    }
+
+    /// Bones added after this state was taken didn't exist yet, so they go away.
+    pub fn restore_rig_state(&mut self, state: &RigState) {
+        self.modifiers = state.modifiers.clone();
+        for (id, bone) in self.bones.iter_mut().enumerate() {
+            bone.removed = state.removed.get(id).copied().unwrap_or(true);
+            if let Some(value) = state.values.get(id) {
+                bone.value = *value;
+            }
+            if let Some(link) = state.links.get(id) {
+                bone.link = *link;
+            }
+        }
+    }
+
+    pub fn part_is_visible(&self, part: PartId) -> bool {
+        let p = &self.parts[part];
+        p.visible && self.rigs[p.rig].visible && !p.is_helper()
+    }
+
+    /// Bounds of what is drawn, optionally limited to one rig.
+    pub fn bounds(&self, rig: Option<RigId>) -> Option<(Vec3, Vec3)> {
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        let mut any = false;
+        for (id, p) in self.parts.iter().enumerate() {
+            if rig.is_some_and(|r| r != p.rig) || !self.part_is_visible(id) {
+                continue;
+            }
+            for corner in BOX_CORNERS {
+                let c = p.world.point(corner * p.size * 0.5);
+                min = min.min(c);
+                max = max.max(c);
+            }
+            any = true;
+        }
+        for b in &self.bones {
+            if rig.is_some_and(|r| r != b.rig) || !self.rigs[b.rig].visible || !b.kind.is_joint() {
+                continue;
+            }
+            for c in [b.head(), b.tail()] {
+                min = min.min(c);
+                max = max.max(c);
+            }
+            any = true;
+        }
+        any.then_some((min, max))
+    }
+
+    /// Adds another imported scene, shifting its ids to fit after the current ones.
+    pub fn append(&mut self, mut other: Scene) {
+        let (po, bo, ro) = (self.parts.len(), self.bones.len(), self.rigs.len());
+        for p in &mut other.parts {
+            p.rig += ro;
+            match &mut p.drive {
+                Drive::Root => {}
+                Drive::Bone(b) => *b += bo,
+                Drive::Rigid { parent, .. } => *parent += po,
+            }
+        }
+        for b in &mut other.bones {
+            b.rig += ro;
+            b.parent = b.parent.map(|x| x + bo);
+            b.children.iter_mut().for_each(|c| *c += bo);
+            match &mut b.link {
+                BoneLink::Joint { part0, part1, .. } => {
+                    *part0 += po;
+                    *part1 += po;
+                }
+                BoneLink::Skinned {
+                    parent_part,
+                    parent_bone,
+                    ..
+                } => {
+                    *parent_part = parent_part.map(|x| x + po);
+                    *parent_bone = parent_bone.map(|x| x + bo);
+                }
+                BoneLink::Free { .. } => {}
+            }
+        }
+        for r in &mut other.rigs {
+            r.parts.iter_mut().for_each(|x| *x += po);
+            r.bones.iter_mut().for_each(|x| *x += bo);
+        }
+        self.parts.append(&mut other.parts);
+        self.bones.append(&mut other.bones);
+        self.rigs.append(&mut other.rigs);
+        self.part_order
+            .extend(other.part_order.into_iter().map(|x| x + po));
+        self.skinned_order
+            .extend(other.skinned_order.into_iter().map(|x| x + bo));
+    }
+
+    /// Works out where each drawn bone ends. Runs once, on the rest pose.
+    pub fn compute_tails(&mut self) {
+        for id in 0..self.bones.len() {
+            let tail = self.rest_tail_world(id);
+            let bone = &mut self.bones[id];
+            let mut local = bone.frame.inverse().point(tail);
+            if local.length() < MIN_BONE_LENGTH {
+                local = local.try_normalize().unwrap_or(Vec3::Y) * MIN_BONE_LENGTH;
+            }
+            bone.tail_local = local;
+        }
+        for id in 0..self.bones.len() {
+            if let Some(parent) = self.bones[id].parent {
+                let head = self.bones[id].head();
+                let (p_head, p_tail) = (self.bones[parent].head(), self.bones[parent].tail());
+                // R6 shoulders are exactly as far from the torso bone's head as its tail,
+                // so ties have to go one way on purpose, not by rounding noise.
+                self.bones[id].link_to_parent_tail = p_tail.distance_squared(head) <= p_head.distance_squared(head) + 1e-3;
+            }
+        }
+    }
+
+    fn rest_tail_world(&self, id: BoneId) -> Vec3 {
+        let bone = &self.bones[id];
+        let head = bone.head();
+        let part = match bone.link {
+            BoneLink::Joint { part1, .. } => Some(part1),
+            BoneLink::Skinned { .. } | BoneLink::Free { .. } => None,
+        };
+        let part_extent = part.map_or(0.6, |p| self.parts[p].size.max_element());
+
+        if !bone.children.is_empty() {
+            let mean = bone
+                .children
+                .iter()
+                .map(|c| self.bones[*c].head())
+                .sum::<Vec3>()
+                / bone.children.len() as f32;
+            // A hub like a torso has children pulling in opposite directions, so
+            // their average lands on the head and tells us nothing.
+            if head.distance(mean) > part_extent * 0.25 {
+                return mean;
+            }
+        }
+        match part {
+            Some(p) => part_far_end(&self.parts[p], head),
+            None => {
+                let dir = bone
+                    .parent
+                    .map(|p| self.bones[p].head())
+                    .and_then(|p| (head - p).try_normalize())
+                    .unwrap_or(Vec3::Y);
+                head + dir * 0.4
+            }
+        }
+    }
+}
+
+pub const MIN_BONE_LENGTH: f32 = 0.2;
+
+const BOX_CORNERS: [Vec3; 8] = [
+    Vec3::new(-1.0, -1.0, -1.0),
+    Vec3::new(1.0, -1.0, -1.0),
+    Vec3::new(-1.0, 1.0, -1.0),
+    Vec3::new(1.0, 1.0, -1.0),
+    Vec3::new(-1.0, -1.0, 1.0),
+    Vec3::new(1.0, -1.0, 1.0),
+    Vec3::new(-1.0, 1.0, 1.0),
+    Vec3::new(1.0, 1.0, 1.0),
+];
+
+/// The center of the part's face opposite the joint, so a leaf bone runs down a
+/// limb instead of cutting out through its side. The axis is whichever the joint
+/// sits furthest along, favoring Y because R6 shoulders are offset on X and Y
+/// equally and limbs hang vertically. A centered joint points up.
+fn part_far_end(part: &Part, head: Vec3) -> Vec3 {
+    let local = part.world.inverse().point(head);
+    let reach = Vec3::new(local.x.abs(), local.y.abs() * 1.25, local.z.abs());
+    let axis = if reach.y >= reach.x && reach.y >= reach.z {
+        1
+    } else if reach.x >= reach.z {
+        0
+    } else {
+        2
+    };
+    let sign = if local[axis] > 0.01 { -1.0 } else { 1.0 };
+    let mut end = Vec3::ZERO;
+    end[axis] = part.size[axis] * 0.5 * sign;
+    part.world.point(end)
+}

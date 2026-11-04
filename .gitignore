@@ -1,0 +1,7 @@
+/target
+/dist
+
+# Only right on the computer this was written on: build output goes to a folder there, and
+# CLAUDE.md points at notes kept there.
+/.cargo/config.toml
+/CLAUDE.md

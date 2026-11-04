@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kaye's Windows Installer package, built by scripts\build-installer.ps1 with WiX 3.
+
+  Everything goes under the current user, as the old setup program did, so nothing needs
+  administrator rights: the program in %LOCALAPPDATA%\Programs\Kaye, a Start menu shortcut,
+  an optional Desktop one, and the .kaye file type. %APPDATA%\Kaye, which holds settings,
+  the API key and backups, is never touched.
+
+  The UpgradeCode must never change. It's how a newer package finds and replaces an older
+  one, and same-version upgrades are allowed so a rebuilt test build installs over the last.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Kaye" Language="1033" Version="$(var.Version)" Manufacturer="Kaye"
+           UpgradeCode="6B1D3A52-7C4E-4F0A-9E2B-3C8D5A1F7E64">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited"
+             Description="Kaye $(var.Version) test build" Comments="A Blender-style animation tool for Roblox rigs" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer Kaye is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="KayeIcon" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="KayeIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="UserPrograms" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="Kaye" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="Program" Guid="D0A7E5C1-2B6F-4E39-8C14-5F92A7B3E018">
+        <File Id="KayeExe" Name="kaye.exe" Source="$(var.Program)" />
+        <!-- Kaye's updater writes this list beside kaye.exe, see src\update.rs. -->
+        <RemoveFile Id="RemoveInstalledList" Name="kaye-files.json" On="uninstall" />
+        <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+        <RemoveFolder Id="RemoveUserPrograms" Directory="UserPrograms" On="uninstall" />
+        <!-- A per-user component has to be kept by a registry value, not a file. -->
+        <RegistryValue Root="HKCU" Key="Software\Kaye\Installer" Name="Program" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!-- The same entries Kaye checks on every launch in src\association.rs. -->
+      <Component Id="FileType" Guid="4C2E8F17-93A5-4D6B-B0E1-7A35C9D2F846">
+        <RegistryValue Root="HKCU" Key="Software\Classes\.kaye" Type="string" Value="Kaye.Project" KeyPath="yes" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Kaye.Project" Type="string" Value="Kaye Project" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Kaye.Project\DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]kaye.exe&quot;,0" />
+        <RegistryValue Root="HKCU" Key="Software\Classes\Kaye.Project\shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]kaye.exe&quot; &quot;%1&quot;" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="8E3B6A29-1F4D-4C7E-A5B2-0D69C8F3E157">
+        <Shortcut Id="StartMenuKaye" Name="Kaye" Description="Animate Roblox rigs" Target="[INSTALLFOLDER]kaye.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Kaye\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="F5C19D73-6A2E-4B08-9D4F-E1B7305A6C92">
+        <Shortcut Id="DesktopKaye" Name="Kaye" Description="Animate Roblox rigs" Target="[INSTALLFOLDER]kaye.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Kaye\Installer" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="Kaye" Description="The program, a Start menu shortcut, and opening .kaye files." Level="1" Absent="disallow" AllowAdvertise="no" ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="Program" />
+      <ComponentRef Id="FileType" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <Feature Id="Desktop" Title="Desktop shortcut" Description="A shortcut to Kaye on the Desktop." Level="1" AllowAdvertise="no">
+        <ComponentRef Id="DesktopShortcut" />
+      </Feature>
+    </Feature>
+
+    <!-- Tells Explorer the .kaye file type changed, as the old setup program did. -->
+    <CustomActionRef Id="WixBroadcastSettingChange" />
+
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <UIRef Id="WixUI_FeatureTree" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.Notice)" />
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.Banner)" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.Dialog)" />
+  </Product>
+</Wix>

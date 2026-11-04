@@ -1,0 +1,6 @@
+# Packed animations, rigs, pictures and icons are bytes, never text to convert.
+*.bin binary
+*.rbxm binary
+*.png binary
+*.ico binary
+*.msi binary
