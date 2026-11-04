@@ -326,3 +326,31 @@ fn a_ray_along_a_triangle_misses_it() {
     let flat = [Vec3::ZERO, Vec3::X, Vec3::Y];
     assert_eq!(ray_triangle(Vec3::new(-1.0, 0.2, 0.0), Vec3::X, flat), None);
 }
+
+/// A body package's own texture with a shirt atlas over it, as Roblox shows one. The atlas
+/// is smaller, so the result keeps the body's size and stretches the atlas over it.
+#[test]
+fn clothes_go_over_a_body_texture_at_its_size() {
+    // The body: 4 by 4, all bone white.
+    let body = TextureData { width: 4, height: 4, levels: vec![[230, 220, 200, 255].repeat(16)] };
+    // The shirt: 2 by 2, red on the left half and clear on the right.
+    let shirt = TextureData { width: 2, height: 2, levels: vec![[[200, 0, 0, 255], [0, 0, 0, 0], [200, 0, 0, 255], [0, 0, 0, 0]].concat()] };
+    let worn = assets::layered_texture(&shirt, &body);
+    assert_eq!((worn.width, worn.height), (4, 4));
+    let pixel = |x: usize, y: usize| &worn.levels[0][(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+    assert_eq!(pixel(0, 1), [200, 0, 0, 255], "the shirt covers the body");
+    assert_eq!(pixel(3, 1), [230, 220, 200, 255], "the body shows where the shirt is clear");
+}
+
+/// Roblox shows a SurfaceAppearance instead of clothing, so its texture is marked.
+#[test]
+fn a_surface_appearance_texture_is_marked() {
+    let appearance = InstanceBuilder::new("SurfaceAppearance").with_property("ColorMapContent", Variant::Content(rbx_types::Content::from_uri("rbxassetid://7")));
+    let plain = dom_with("LeftHand", Vector3::new(1.0, 1.0, 1.0), vec![], vec![]);
+    let pbr = dom_with("LeftHand", Vector3::new(1.0, 1.0, 1.0), vec![appearance], vec![]);
+    let hand = |dom: &WeakDom| import_dom(dom, "test.rbxm").unwrap().scene.parts[0].clone();
+    assert!(!hand(&plain).surface_appearance);
+    let hand = hand(&pbr);
+    assert!(hand.surface_appearance);
+    assert_eq!(hand.texture_asset.as_deref(), Some("rbxassetid://7"));
+}

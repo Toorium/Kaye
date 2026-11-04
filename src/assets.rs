@@ -67,21 +67,53 @@ pub fn decode_texture(bytes: &[u8]) -> Result<TextureData, String> {
     Ok(with_smaller_sizes(rgba.into_raw(), width, height))
 }
 
-/// One texture laid over another, which is what a torso wears: a shirt over pants.
+/// One texture laid over another, which is what a torso wears: a shirt over pants, and both
+/// over a body package's own texture. It's as big as the bigger of the two, so a body's
+/// detail isn't lost under a smaller clothing atlas, which is stretched smoothly to fit.
 pub fn layered_texture(top: &TextureData, under: &TextureData) -> TextureData {
-    let (width, height) = (top.width, top.height);
-    let mut pixels = top.levels[0].clone();
+    let (width, height) = if under.width * under.height > top.width * top.height { (under.width, under.height) } else { (top.width, top.height) };
+    let mut pixels = vec![0; (width * height * 4) as usize];
     for (i, pixel) in pixels.chunks_exact_mut(4).enumerate() {
         let (x, y) = (i as u32 % width, i as u32 / width);
-        let at = ((y * under.height / height * under.width + x * under.width / width) * 4) as usize;
-        let below = &under.levels[0][at..at + 4];
-        let cover = pixel[3] as u32;
+        let spot = [(x as f32 + 0.5) / width as f32, (y as f32 + 0.5) / height as f32];
+        let (above, below) = (sample_smooth(top, spot), sample_smooth(under, spot));
+        let cover = above[3] as u32;
         for channel in 0..3 {
-            pixel[channel] = ((pixel[channel] as u32 * cover + below[channel] as u32 * (255 - cover)) / 255) as u8;
+            pixel[channel] = ((above[channel] as u32 * cover + below[channel] as u32 * (255 - cover)) / 255) as u8;
         }
-        pixel[3] = pixel[3].max(below[3]);
+        pixel[3] = above[3].max(below[3]);
     }
     with_smaller_sizes(pixels, width, height)
+}
+
+/// A texture's color at a spot from 0 to 1 across and down, blended from the four pixels
+/// around it. At its own size that's exactly the pixel there.
+fn sample_smooth(texture: &TextureData, spot: [f32; 2]) -> [u8; 4] {
+    let (w, h) = (texture.width, texture.height);
+    let fx = (spot[0] * w as f32 - 0.5).clamp(0.0, (w - 1) as f32);
+    let fy = (spot[1] * h as f32 - 0.5).clamp(0.0, (h - 1) as f32);
+    let (x0, y0) = (fx as u32, fy as u32);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+    let pixel = |x: u32, y: u32| {
+        let at = ((y * w + x) * 4) as usize;
+        &texture.levels[0][at..at + 4]
+    };
+    let (a, b, c, d) = (pixel(x0, y0), pixel(x1, y0), pixel(x0, y1), pixel(x1, y1));
+    std::array::from_fn(|i| {
+        let top = a[i] as f32 * (1.0 - tx) + b[i] as f32 * tx;
+        let bottom = c[i] as f32 * (1.0 - tx) + d[i] as f32 * tx;
+        (top * (1.0 - ty) + bottom * ty).round() as u8
+    })
+}
+
+/// What a body texture with clothes over it goes by. The top bit keeps it clear of real
+/// asset ids, as with the other textures Kaye makes.
+fn worn_over(own: u64, dressed: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    ("worn over", own, dressed).hash(&mut hasher);
+    hasher.finish() | 1 << 63
 }
 
 pub(crate) fn with_smaller_sizes(pixels: Vec<u8>, width: u32, height: u32) -> TextureData {
@@ -248,6 +280,26 @@ impl AssetStore {
             let drawn = atlas.build(shirt.and_then(|s| self.loaded_texture(s)).map(Arc::as_ref), pants.and_then(|p| self.loaded_texture(p)).map(Arc::as_ref));
             self.textures.insert(id, Slot::Ready(Arc::new(drawn)));
         }
+    }
+
+    /// A body part's own texture with the clothes drawn over it, as Roblox shows a body
+    /// package wearing a shirt. Made once the texture and the atlas `dress` draws are ready.
+    pub fn dress_over(&mut self, own: u64, atlas: BodyAtlas, shirt: Option<u64>, pants: Option<u64>) {
+        let Some(dressed) = self.dressed(atlas, shirt, pants) else { return };
+        let id = worn_over(own, dressed);
+        if self.textures.contains_key(&id) {
+            return;
+        }
+        if let (Some(top), Some(under)) = (self.loaded_texture(dressed), self.loaded_texture(own)) {
+            let both = layered_texture(top, under);
+            self.textures.insert(id, Slot::Ready(Arc::new(both)));
+        }
+    }
+
+    /// The id of what `dress_over` has made for this texture and these clothes, if it has.
+    pub fn dressed_over(&self, own: u64, atlas: BodyAtlas, shirt: Option<u64>, pants: Option<u64>) -> Option<u64> {
+        let dressed = self.dressed(atlas, shirt, pants)?;
+        Some(worn_over(own, dressed)).filter(|id| self.textures.contains_key(id))
     }
 
     /// The id of the atlas `dress` has drawn from these clothes so far.

@@ -109,8 +109,80 @@ fn parse(bytes: &[u8]) -> Result<Project, String> {
     check(&project).map_err(|what| format!("The project is damaged: {what}"))?;
     project.animation.ensure_clips(&project.scene);
     upgrade_heads(&mut project.scene);
+    upgrade_joints(&mut project.scene);
     project.scene.evaluate();
     Ok(project)
+}
+
+/// Projects saved before Kaye read every kind of joint can hold parts left standing on their
+/// own, such as hats held by a RigidConstraint, and know nothing of SurfaceAppearances. Each
+/// rig's original model is kept in the project, so it's read again: a part that was left
+/// standing is attached as it is now, and the SurfaceAppearance mark is copied. Nothing else
+/// changes. Parts are matched in order and by name, so a rig that doesn't line up is left
+/// alone. Only rigs that could be affected are read, since reading costs time on every open.
+fn upgrade_joints(scene: &mut Scene) {
+    let mut attached = false;
+    for r in 0..scene.rigs.len() {
+        let Some(model) = scene.rigs[r].model.clone() else { continue };
+        let ours = scene.rigs[r].parts.clone();
+        let roots = ours.iter().filter(|p| matches!(scene.parts[**p].drive, Drive::Root)).count();
+        let dressed = scene.rigs[r].shirt.is_some() || scene.rigs[r].pants.is_some();
+        if roots < 2 && !(dressed && ours.iter().any(|p| scene.parts[*p].texture_asset.is_some())) {
+            continue;
+        }
+        let Ok(fresh) = crate::import::import_bytes(&model, "model.rbxm") else { continue };
+        let Some(theirs) = fresh.scene.rigs.first().map(|rig| rig.parts.clone()) else { continue };
+        let lines_up = theirs.len() == ours.len() && theirs.iter().zip(&ours).all(|(t, o)| fresh.scene.parts[*t].name == scene.parts[*o].name);
+        if !lines_up {
+            continue;
+        }
+        for (&mine, &read) in ours.iter().zip(&theirs) {
+            scene.parts[mine].surface_appearance = fresh.scene.parts[read].surface_appearance;
+            if let (Drive::Root, Drive::Rigid { parent, offset }) = (scene.parts[mine].drive, fresh.scene.parts[read].drive) {
+                let Some(at) = theirs.iter().position(|p| *p == parent) else { continue };
+                scene.parts[mine].drive = Drive::Rigid { parent: ours[at], offset };
+                attached = true;
+            }
+        }
+    }
+    if attached {
+        reorder_parts(scene);
+    }
+}
+
+/// Puts every part after the one it hangs from, keeping the order otherwise.
+fn reorder_parts(scene: &mut Scene) {
+    let holder = |p: usize| match scene.parts[p].drive {
+        Drive::Root => None,
+        Drive::Rigid { parent, .. } => Some(parent),
+        Drive::Bone(b) => match scene.bones[b].link {
+            BoneLink::Joint { part0, .. } => Some(part0),
+            _ => None,
+        },
+    };
+    let mut listed = vec![false; scene.parts.len()];
+    for p in &scene.part_order {
+        listed[*p] = true;
+    }
+    let mut placed = vec![false; scene.parts.len()];
+    let mut order = Vec::with_capacity(scene.part_order.len());
+    let mut left = scene.part_order.clone();
+    while !left.is_empty() {
+        let before = left.len();
+        left.retain(|&p| {
+            let ready = holder(p).is_none_or(|h| placed[h] || !listed[h]);
+            if ready {
+                placed[p] = true;
+                order.push(p);
+            }
+            !ready
+        });
+        // A loop would never finish, so whatever's left keeps its order.
+        if left.len() == before {
+            order.append(&mut left);
+        }
+    }
+    scene.part_order = order;
 }
 
 /// React was taken out of Kaye. A project still holding one opens without it, and the rest

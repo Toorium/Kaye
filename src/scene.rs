@@ -95,6 +95,10 @@ pub struct Part {
     /// Decals and Textures stuck on its faces.
     #[serde(default)]
     pub decals: Vec<Decal>,
+    /// Its texture is a SurfaceAppearance's, which Roblox shows instead of any shirt or pants.
+    /// A plain texture on a body part has the clothes drawn over it.
+    #[serde(default)]
+    pub surface_appearance: bool,
 }
 
 /// A side of a part, as Roblox's `Enum.NormalId` numbers them.
@@ -763,6 +767,7 @@ impl Scene {
             material: Material::Plastic,
             locked: false,
             decals: Vec::new(),
+            surface_appearance: false,
         });
         id
     }

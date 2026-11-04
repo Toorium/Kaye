@@ -274,20 +274,41 @@ fn part_shape(inst: &Instance) -> PartShape {
     }
 }
 
+/// What a joint does to the part it holds, and where its offsets come from.
+#[derive(Clone, Copy, PartialEq)]
 enum JointClass {
+    /// Animated, so it becomes a bone.
     Bone(BoneKind),
+    /// Holds a part at the joint's own offsets: `C0` and `C1` on a joint instance, or two
+    /// attachments on a `RigidConstraint`.
     Rigid,
+    /// Holds a part with no offsets of its own, so the parts stay where the file saved them.
+    /// A `WeldConstraint` works this way. So do the physics constraints, which in Roblox let
+    /// a part swing or slide, but with no physics here they keep it where it was put, on
+    /// whatever it hangs from.
+    Kept,
 }
 
+/// Every class Roblox joins parts with. Joint instances name their parts in `Part0` and
+/// `Part1`, `WeldConstraint` does too, and the other constraints join two attachments.
+/// Forces such as `VectorForce` and `LineForce`, and `NoCollisionConstraint`, don't hold
+/// a part anywhere, so they aren't here.
 fn joint_class(class: &str) -> Option<JointClass> {
     Some(match class {
         "Motor6D" => JointClass::Bone(BoneKind::Motor6D),
-        "Motor" => JointClass::Bone(BoneKind::LegacyMotor),
+        "Motor" | "VelocityMotor" => JointClass::Bone(BoneKind::LegacyMotor),
         "AnimationConstraint" => JointClass::Bone(BoneKind::AnimationConstraint),
-        "Weld" | "ManualWeld" | "ManualGlue" | "Snap" | "Glue" | "Rotate" | "RotateP" | "RotateV"
-        | "WeldConstraint" | "RigidConstraint" => JointClass::Rigid,
+        "Weld" | "ManualWeld" | "ManualGlue" | "Snap" | "Glue" | "Rotate" | "RotateP" | "RotateV" | "RigidConstraint" => JointClass::Rigid,
+        "WeldConstraint" | "BallSocketConstraint" | "HingeConstraint" | "PrismaticConstraint" | "CylindricalConstraint" | "UniversalConstraint"
+        | "RodConstraint" | "RopeConstraint" | "SpringConstraint" | "PlaneConstraint" | "SlidingBallConstraint" | "AlignPosition"
+        | "AlignOrientation" => JointClass::Kept,
         _ => return None,
     })
+}
+
+/// Joint instances and `WeldConstraint` name parts. Everything else joins attachments.
+fn joins_parts(class: &str) -> bool {
+    class == "WeldConstraint" || !class.ends_with("Constraint") && !class.starts_with("Align")
 }
 
 struct JointInfo {
@@ -312,6 +333,7 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
         }
         let mut mesh_asset = content_prop(inst, MESH_PROPS);
         let mut texture_asset = content_prop(inst, TEXTURE_PROPS);
+        let mut surface_appearance = false;
         let mut mesh_fit = MeshFit::Size;
         for child in inst.children() {
             let Some(child) = dom.get_by_ref(*child) else {
@@ -333,7 +355,10 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
                 texture_asset = texture_asset.or_else(|| content_prop(child, TEXTURE_PROPS));
             }
             if child.class == "SurfaceAppearance" {
-                texture_asset = content_prop(child, COLOR_MAP_PROPS).or(texture_asset);
+                if let Some(color) = content_prop(child, COLOR_MAP_PROPS) {
+                    texture_asset = Some(color);
+                    surface_appearance = true;
+                }
             }
         }
         if matches!(mesh_fit, MeshFit::Built { shape: BuiltShape::Head, .. }) && texture_asset.is_none() {
@@ -363,6 +388,7 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
             // be impossible to click here.
             locked: false,
             decals,
+            surface_appearance,
         });
     }
 
@@ -374,44 +400,37 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
         let Some(class) = joint_class(inst.class.as_str()) else {
             continue;
         };
-        let (a, b, c0, c1) = if inst.class == "AnimationConstraint" {
-            match attachment_link(dom, inst, &part_ids) {
-                Some(link) => link,
-                None => continue,
-            }
-        } else {
+        // Turned off in Studio, so it holds nothing there either.
+        if bool_prop(inst, "Enabled") == Some(false) {
+            continue;
+        }
+        let link = if joins_parts(inst.class.as_str()) {
             let a = ref_prop(inst, "Part0").and_then(|x| part_ids.get(&x).copied());
             let b = ref_prop(inst, "Part1").and_then(|x| part_ids.get(&x).copied());
-            let (Some(a), Some(b)) = (a, b) else {
-                if matches!(class, JointClass::Bone(_)) {
-                    warnings.push(format!(
-                        "{}: joint \"{}\" is missing a part and was skipped.",
-                        group.name, inst.name
-                    ));
-                }
-                continue;
-            };
-            if inst.class == "WeldConstraint" || inst.class == "RigidConstraint" {
-                // These store no offsets; the parts' saved positions define them.
-                let rel = parts[a].file_cframe.inverse() * parts[b].file_cframe;
-                (a, b, rel, Xf::IDENTITY)
-            } else {
-                (
-                    a,
-                    b,
-                    cframe_prop(inst, "C0").unwrap_or(Xf::IDENTITY),
-                    cframe_prop(inst, "C1").unwrap_or(Xf::IDENTITY),
-                )
+            let offsets = (cframe_prop(inst, "C0").unwrap_or(Xf::IDENTITY), cframe_prop(inst, "C1").unwrap_or(Xf::IDENTITY));
+            a.zip(b).map(|(a, b)| (a, b, offsets.0, offsets.1))
+        } else {
+            attachment_link(dom, inst, &part_ids)
+        };
+        let Some((a, b, c0, c1)) = link else {
+            if matches!(class, JointClass::Bone(_)) {
+                warnings.push(format!(
+                    "{}: joint \"{}\" is missing a part and was skipped.",
+                    group.name, inst.name
+                ));
             }
+            continue;
         };
         if a == b {
             continue;
         }
+        // The parts' saved positions say where it holds them.
+        let (c0, c1) = if class == JointClass::Kept { (parts[a].file_cframe.inverse() * parts[b].file_cframe, Xf::IDENTITY) } else { (c0, c1) };
         joints.push(JointInfo {
             name: inst.name.clone(),
             kind: match class {
                 JointClass::Bone(k) => Some(k),
-                JointClass::Rigid => None,
+                JointClass::Rigid | JointClass::Kept => None,
             },
             part0: a,
             part1: b,
@@ -419,6 +438,7 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
             c1,
         });
     }
+    attach_loose_accessories(dom, &part_ids, &parts, &mut joints);
 
     let primary = group
         .roots
@@ -530,14 +550,72 @@ fn attachment_link(
     inst: &Instance,
     part_ids: &HashMap<Ref, PartId>,
 ) -> Option<(PartId, PartId, Xf, Xf)> {
-    let side = |name: &str| -> Option<(PartId, Xf)> {
-        let att = dom.get_by_ref(ref_prop(inst, name)?)?;
-        let part = *part_ids.get(&att.parent())?;
-        Some((part, cframe_prop(att, "CFrame").unwrap_or(Xf::IDENTITY)))
-    };
+    let side = |name: &str| attachment_place(dom, ref_prop(inst, name)?, part_ids);
     let (a, c0) = side("Attachment0")?;
     let (b, c1) = side("Attachment1")?;
     Some((a, b, c0, c1))
+}
+
+/// The part an attachment is on, and where on it. A `Bone` is an attachment too, and
+/// bones nest, each placed inside the one holding it, so this climbs to the part.
+fn attachment_place(dom: &WeakDom, attachment: Ref, part_ids: &HashMap<Ref, PartId>) -> Option<(PartId, Xf)> {
+    let mut inst = dom.get_by_ref(attachment)?;
+    let mut offset = cframe_prop(inst, "CFrame").unwrap_or(Xf::IDENTITY);
+    loop {
+        if let Some(part) = part_ids.get(&inst.parent()) {
+            return Some((*part, offset));
+        }
+        inst = dom.get_by_ref(inst.parent())?;
+        if !matches!(inst.class.as_str(), "Attachment" | "Bone") {
+            return None;
+        }
+        offset = cframe_prop(inst, "CFrame").unwrap_or(Xf::IDENTITY) * offset;
+    }
+}
+
+/// An accessory saved with no joint at all, as Studio leaves one that was never worn.
+/// Roblox puts it on by its attachment's name: a Handle's `HatAttachment` goes onto the
+/// body part with a `HatAttachment`. One with no name that matches, like an old hat, stays
+/// where the file saved it, on the head.
+fn attach_loose_accessories(dom: &WeakDom, part_ids: &HashMap<Ref, PartId>, parts: &[Part], joints: &mut Vec<JointInfo>) {
+    let in_accessory = |part: Ref| {
+        let mut at = dom.get_by_ref(part);
+        while let Some(inst) = at {
+            if matches!(inst.class.as_str(), "Accessory" | "Hat" | "Accoutrement") {
+                return true;
+            }
+            at = dom.get_by_ref(inst.parent());
+        }
+        false
+    };
+    let attachments = |part: Ref| {
+        let children = dom.get_by_ref(part).map(|p| p.children().to_vec()).unwrap_or_default();
+        children.into_iter().filter_map(|c| dom.get_by_ref(c)).filter(|c| c.class == "Attachment").collect::<Vec<_>>()
+    };
+    let mut ordered: Vec<(Ref, PartId)> = part_ids.iter().map(|(r, p)| (*r, *p)).collect();
+    ordered.sort_by_key(|(_, p)| *p);
+    let (worn, body): (Vec<_>, Vec<_>) = ordered.into_iter().partition(|(r, _)| in_accessory(*r));
+    let mut spots: HashMap<String, (PartId, Xf)> = HashMap::new();
+    for (r, part) in &body {
+        for att in attachments(*r) {
+            spots.entry(att.name.to_string()).or_insert((*part, cframe_prop(att, "CFrame").unwrap_or(Xf::IDENTITY)));
+        }
+    }
+    let head = body.iter().map(|(_, p)| *p).find(|p| parts[*p].name == "Head");
+    let joined: HashSet<PartId> = joints.iter().flat_map(|j| [j.part0, j.part1]).collect();
+    for (r, handle) in worn {
+        if joined.contains(&handle) {
+            continue;
+        }
+        let matched = attachments(r).into_iter().find_map(|att| {
+            let (part, c0) = *spots.get(att.name.as_str())?;
+            Some((part, c0, cframe_prop(att, "CFrame").unwrap_or(Xf::IDENTITY)))
+        });
+        let link = matched.or_else(|| head.map(|head| (head, parts[head].file_cframe.inverse() * parts[handle].file_cframe, Xf::IDENTITY)));
+        if let Some((part0, c0, c1)) = link {
+            joints.push(JointInfo { name: "AccessoryWeld".to_string(), kind: None, part0, part1: handle, c0, c1 });
+        }
+    }
 }
 
 /// Decides how each part gets positioned. Animated joints always run Part0 to
@@ -635,7 +713,10 @@ fn solve_hierarchy(
                 } else {
                     (j.part0, forward.inverse())
                 };
-                if placed[other] {
+                // An animated joint wins over anything else holding the same part. New R15
+                // rigs pair every AnimationConstraint with a BallSocketConstraint, which
+                // would otherwise freeze the limb.
+                if placed[other] || driven_by[other].is_some() {
                     continue;
                 }
                 placed[other] = true;

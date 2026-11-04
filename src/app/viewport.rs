@@ -541,6 +541,21 @@ fn want_assets(app: &mut KayeApp) {
             }
         }
     }
+    // A body package's own texture goes under the clothes, except a SurfaceAppearance's,
+    // which Roblox shows instead of them.
+    for &id in with_assets {
+        let part = &app.scene.parts[id];
+        if part.surface_appearance || part.mesh_asset.is_none() {
+            continue;
+        }
+        let (Some(atlas), Some(own)) = (BodyAtlas::of_part(&part.name), part.texture_asset.as_deref().and_then(texture_id)) else {
+            continue;
+        };
+        let (shirt, pants) = rig_clothing(app, part.rig);
+        if shirt.is_some() || pants.is_some() {
+            app.assets.dress_over(own, atlas, shirt, pants);
+        }
+    }
 }
 
 fn rig_clothing(app: &KayeApp, rig: RigId) -> (Option<u64>, Option<u64>) {
@@ -720,7 +735,17 @@ fn part_items(app: &KayeApp, plain: bool) -> PartDraws {
                 Some(_) => None,
                 None => worn.and_then(|(_, shirt, pants)| worn_texture(app, p.rig, shirt, pants)),
             };
-            let texture = own.filter(|t| app.assets.loaded_texture(*t).is_some()).or(dressed);
+            let own = own.filter(|t| app.assets.loaded_texture(*t).is_some());
+            // A body package's own texture with the clothes over it. A SurfaceAppearance
+            // shows alone, as in Roblox.
+            let worn_over = match (asset, own) {
+                (Some(_), Some(own)) if !p.surface_appearance => BodyAtlas::of_part(&p.name).and_then(|atlas| {
+                    let (shirt, pants) = rig_clothing(app, p.rig);
+                    app.assets.dressed_over(own, atlas, shirt, pants)
+                }),
+                _ => None,
+            };
+            let texture = worn_over.or(own).or(dressed);
             let texture = texture.and_then(|t| app.assets.loaded_texture(t).map(|data| (t, data)));
             if let Some((id, data)) = texture {
                 if !draws.textures.iter().any(|(t, _)| *t == id) {
