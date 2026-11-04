@@ -85,6 +85,16 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
     <td align="center">Onion skins</td>
     <td align="center">Roblox materials</td>
   </tr>
+  <tr>
+    <td width="33%"><img src="docs/images/avatar-onion.png" alt="An onion skin in green over a real avatar with accessories, clothing and a body package"></td>
+    <td width="33%"><img src="docs/images/avatar-shaded.png" alt="The same avatar in Shaded mode, with soft lighting and the bones hidden"></td>
+    <td width="33%"><img src="docs/images/avatar-studio.png" alt="The same avatar in Studio mode, lit like Roblox Studio, with its bones showing"></td>
+  </tr>
+  <tr>
+    <td align="center">Onion skin on a real avatar</td>
+    <td align="center">Shaded mode</td>
+    <td align="center">Studio mode</td>
+  </tr>
 </table>
 
 ## Performance
