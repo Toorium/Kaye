@@ -1,12 +1,12 @@
 {
-    "version":  "0.1.4",
-    "notes":  "New shelf tabs: Animation, Modifiers, Objects and View, each with that kind of tool. New Individual Animation Properties in Preferences \u003e Animation: when it\u0027s on, each animation keeps its own frame rate and modifiers, and switching animations brings them back.",
+    "version":  "0.1.5",
+    "notes":  "New: a Rigging tab (join parts with Motor6Ds, move pivots, parts and attachments), reference pictures, GIFs and videos that play with the timeline, move and rotate snapping, F11 fullscreen, and a faster timeline and graph. Deleting a joint now keeps its limb. Kaye now uses the Kaye License: updating means you accept it. Read it at https://github.com/Toorium/Kaye/blob/main/LICENSE",
     "files":  [
                   {
                       "path":  "kaye.exe",
-                      "size":  42332672,
-                      "sha256":  "90adc53b0c0d63ab3d503f2f0c838b307430cf2c8c6eb4377297916a4421b7f1",
-                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.4/kaye.exe"
+                      "size":  43052032,
+                      "sha256":  "ef53bafbc764f12da69d2a4344e493a9c99f86e778f895385e13299084f09459",
+                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.5/kaye.exe"
                   }
               ]
 }
