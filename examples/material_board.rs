@@ -59,7 +59,7 @@ fn main() {
     }];
     let mut animation = Animation::default();
     animation.ensure_clips(&scene);
-    let view = View { frame: 0.0, target: Vec3::new(2.0, 0.0, -2.0), yaw: 0.35, pitch: -0.5, dist: 30.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() };
+    let view = View { frame: 0.0, target: Vec3::new(2.0, 0.0, -2.0), yaw: 0.35, pitch: -0.5, dist: 30.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() };
     project::save(std::path::Path::new(&out), &scene, &animation, &view).unwrap();
     println!("wrote {out}");
 }

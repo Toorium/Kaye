@@ -1412,7 +1412,7 @@ dependencies = [
 
 [[package]]
 name = "kaye"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.23.1",
  "bytemuck",
@@ -1436,13 +1436,14 @@ dependencies = [
  "serde_json",
  "ureq",
  "ustr",
+ "windows",
  "windows-sys 0.61.2",
  "winresource",
 ]
 
 [[package]]
 name = "kaye-setup"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "crc32fast",
  "flate2",

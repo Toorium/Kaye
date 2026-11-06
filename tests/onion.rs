@@ -181,6 +181,7 @@ fn an_onion_skin_is_saved_and_older_projects_open_without_one() {
         preview: false,
         through: false,
         motion_paths: Vec::new(),
+        references: Vec::new(),
     };
 
     project::save(&path, &scene, &animation, &view).unwrap();

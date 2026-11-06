@@ -158,18 +158,26 @@ fn ik_and_unparent_come_along_with_a_moved_rig() {
 }
 
 #[test]
-fn deleting_a_joint_takes_what_hangs_from_it() {
+fn deleting_a_joint_keeps_its_limb_where_it_was() {
     let mut scene = sample("R15Rig.rbxm");
     let elbow = bone_named(&scene, "RightElbow");
     let wrist = bone_named(&scene, "RightWrist");
     let shoulder = bone_named(&scene, "RightShoulder");
+    let lower = scene.parts.iter().position(|p| p.name == "RightLowerArm").unwrap();
+    let hand = scene.parts.iter().position(|p| p.name == "RightHand").unwrap();
+    let (lower_at, hand_at) = (scene.parts[lower].world, scene.parts[hand].world);
     let parts_were = scene.live_parts();
     let gone = modifiers::delete_bones(&mut scene, &[elbow]);
-    assert!(gone.contains(&elbow) && gone.contains(&wrist));
-    assert!(!gone.contains(&shoulder));
-    assert_eq!(scene.live_parts(), parts_were - 2, "lower arm and hand");
-    let hand = scene.parts.iter().position(|p| p.name == "RightHand").unwrap();
-    assert!(!scene.part_is_visible(hand));
+    assert_eq!(gone, [elbow], "only the joint goes");
+    assert!(!scene.bones[wrist].removed && !scene.bones[shoulder].removed);
+    assert_eq!(scene.live_parts(), parts_were, "every part stays");
+    assert!(scene.part_is_visible(lower) && scene.part_is_visible(hand));
+    assert!(scene.parts[lower].world.approx_eq(lower_at) && scene.parts[hand].world.approx_eq(hand_at), "nothing moved");
+    assert_eq!(scene.bones[wrist].parent, None, "the wrist now hangs from a part on its own");
+    // Turning the shoulder no longer takes the lower arm along.
+    scene.bones[shoulder].pose = Xf::new(Quat::from_rotation_x(1.0), Vec3::ZERO);
+    scene.evaluate();
+    assert!(scene.parts[lower].world.approx_eq(lower_at));
 }
 
 #[test]
@@ -343,7 +351,7 @@ fn placement_deleted_parts_and_inherit_survive_saving() {
     scene.set_rig_placement(0, placement);
     modifiers::add_inherit(&mut scene, neck);
     modifiers::delete_part(&mut scene, welded);
-    let view = project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() };
+    let view = project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() };
     let path = std::env::temp_dir().join(format!("kaye-workspace-{}.kaye", std::process::id()));
     project::save(&path, &scene, &Animation::default(), &view).unwrap();
     let loaded = project::load(&path).unwrap();

@@ -283,7 +283,7 @@ fn an_older_projects_head_becomes_the_classic_one() {
     scene.parts[head].mesh_fit = MeshFit::Scaled { scale, offset: Vec3::ZERO };
     scene.parts[head].texture_asset = None;
     let path = std::env::temp_dir().join(format!("kaye-old-head-{}.kaye", std::process::id()));
-    let view = kaye::project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() };
+    let view = kaye::project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() };
     kaye::project::save(&path, &scene, &kaye::animation::Animation::default(), &view).unwrap();
     let opened = kaye::project::load(&path).unwrap();
     std::fs::remove_file(&path).ok();

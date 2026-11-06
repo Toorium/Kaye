@@ -1,6 +1,6 @@
 //! The 3D view: its header, input handling, drawing and overlays.
 
-use egui::{Align, Align2, CentralPanel, Color32, ComboBox, FontId, Frame, Layout, Panel, PointerButton, Pos2, Rect, Sense, Shape, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{Align, Align2, CentralPanel, Color32, ComboBox, DragValue, FontId, Frame, Layout, Panel, PointerButton, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui, UiBuilder, Vec2, pos2, vec2};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 
 use super::chrome::{self, icon_button};
 use super::icons::{self, Icon};
+use super::rig_mode::Mode;
 use super::{FrameShape, KayeApp, Selection, ToastKind, theme};
 use crate::camera::{ThroughView, ViewPreset};
 use crate::gizmo::{self, GizmoView, Handle, Space, axis_colors};
@@ -80,9 +81,50 @@ fn header(app: &mut KayeApp, ui: &mut Ui) {
                     }
                 });
                 app.view.space = space;
+                ui.add_space(8.0);
+                snap_controls(app, ui);
             });
         });
     });
+}
+
+/// The magnet that turns snapping on, and beside it the steps, as Studio shows its Move and
+/// Rotate increments. Laid out right to left, so the steps come first.
+fn snap_controls(app: &mut KayeApp, ui: &mut Ui) {
+    let v = &mut app.settings.viewport;
+    let mut steps = Vec::new();
+    if v.snap_move {
+        let unit = if (v.move_step - 1.0).abs() < 1e-6 { "stud" } else { "studs" };
+        steps.push(format!("{} {unit}", trim_number(v.move_step)));
+    }
+    if v.snap_rotate {
+        steps.push(format!("{}\u{b0}", trim_number(v.rotate_step)));
+    }
+    let summary = if steps.is_empty() { "Off".to_string() } else { steps.join("  ") };
+    let text = RichText::new(summary).color(if v.snap { theme::text() } else { theme::text_dim() });
+    ui.menu_button(text, |ui| {
+        chrome::menu_rows(ui);
+        theme::sunken(ui);
+        let v = &mut app.settings.viewport;
+        egui::Grid::new("snap_steps").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.checkbox(&mut v.snap_move, "Move");
+            ui.add_enabled(v.snap_move, DragValue::new(&mut v.move_step).range(0.01..=100.0).speed(0.05).suffix(" studs").max_decimals(3));
+            ui.end_row();
+            ui.checkbox(&mut v.snap_rotate, "Rotate");
+            ui.add_enabled(v.snap_rotate, DragValue::new(&mut v.rotate_step).range(0.1..=180.0).speed(0.5).suffix("\u{b0}").max_decimals(2));
+            ui.end_row();
+        });
+    });
+    let tip = app.tip(Action::ToggleSnap);
+    if chrome::icon_button(ui, Icon::Snap, true, app.settings.viewport.snap, &tip).clicked() {
+        app.settings.viewport.snap = !app.settings.viewport.snap;
+    }
+}
+
+/// A step without trailing zeros, so 1.0 reads as 1 and 0.25 as 0.25.
+fn trim_number(value: f32) -> String {
+    let text = format!("{value:.3}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// A button that's dragged to move the view, for anyone without a middle mouse button.
@@ -161,7 +203,10 @@ fn scene_view(app: &mut KayeApp, ui: &mut Ui, rect: Rect, frame: &mut eframe::Fr
     paint_cameras(app, &painter, rect);
     paint_camera_roots(app, &painter, rect);
     paint_motion_paths(app, &painter, rect);
-    paint_ik_controls(app, &painter, rect);
+    if app.mode == Mode::Animation {
+        paint_ik_controls(app, &painter, rect);
+    }
+    paint_attachments(app, &painter, rect);
     paint_camera_frame(app, &painter, rect);
     paint_gizmo(app, &painter, rect, hot, mouse);
     if let (Some(anchor), Some(mouse)) = (app.box_select, mouse) {
@@ -232,6 +277,18 @@ fn camera_input(
 
 fn gizmo_view(app: &KayeApp, rect: Rect) -> Option<GizmoView<'_>> {
     let op = app.tool.op()?;
+    if app.mode == Mode::Rigging {
+        if let Some((moving, _)) = app.rig_moving() {
+            return Some(GizmoView {
+                camera: &app.camera,
+                rect,
+                frame: moving.frame(&app.scene),
+                space: app.view.space,
+                op,
+                size: app.settings.viewport.gizmo_size,
+            });
+        }
+    }
     if let Some(rig) = app.movable_rig() {
         let shown = app.scene.rigs[rig].visible;
         return shown.then(|| GizmoView {
@@ -282,8 +339,10 @@ fn pose_input(
     });
     let inside = rect.contains(mouse) && response.hovered();
 
+    let snap = app.drag_snap(modifiers.ctrl);
     if let Some(session) = &mut app.session {
         app.hover = Selection::None;
+        session.snap = snap;
         session.update(&mut app.scene, &app.camera, rect, mouse);
         let modal = session.modal;
         ctx.request_repaint();
@@ -306,7 +365,18 @@ fn pose_input(
     if let Some(anchor) = app.box_select {
         app.hover = Selection::None;
         ctx.request_repaint();
-        if released {
+        if released && app.mode == Mode::Rigging {
+            app.box_select = None;
+            let adding = modifiers.shift || modifiers.ctrl;
+            if !adding {
+                app.rig_click(Selection::None, false);
+            }
+            for part in parts_in_box(app, rect, Rect::from_two_pos(anchor, mouse)) {
+                if !app.rigging.picks.contains(&part) {
+                    app.rig_click(Selection::Part(part), true);
+                }
+            }
+        } else if released {
             app.box_select = None;
             let bones = bones_in_box(app, rect, Rect::from_two_pos(anchor, mouse));
             app.select_bones(bones, modifiers.shift || modifiers.ctrl);
@@ -318,6 +388,9 @@ fn pose_input(
     if response.clicked() {
         if app.swallow_click {
             app.swallow_click = false;
+        } else if !modifiers.alt && app.mode == Mode::Rigging {
+            let picked = rig_pick(app, rect, mouse);
+            app.rig_click(picked, modifiers.shift || modifiers.ctrl);
         } else if !modifiers.alt {
             let picked = pick(app, rect, mouse);
             app.scroll_to_selection = true;
@@ -345,6 +418,10 @@ fn pose_input(
     if pressed && !(modifiers.alt && app.settings.navigation.alt_left_orbit) {
         if let Some(handle) = *hot {
             let (op, lock) = handle.session_args(app.view.space);
+            if app.mode == Mode::Rigging && app.rig_moving().is_some() {
+                app.start_rig_item_session(op, lock, false, mouse);
+                return;
+            }
             if let Some(rig) = app.movable_rig() {
                 app.start_rig_session(rig, op, lock, false, mouse);
                 return;
@@ -361,7 +438,100 @@ fn pose_input(
         app.box_select = ctx.input(|i| i.pointer.press_origin()).or(Some(mouse));
         return;
     }
-    app.hover = if hot.is_some() { Selection::None } else { pick(app, rect, mouse) };
+    app.hover = if hot.is_some() {
+        Selection::None
+    } else if app.mode == Mode::Rigging {
+        rig_pick(app, rect, mouse)
+    } else {
+        pick(app, rect, mouse)
+    };
+}
+
+/// How close the mouse has to be to an attachment or a joint's pivot to pick it.
+const RIG_PICK: f32 = 8.0;
+
+/// What a click picks in the Rigging tab: attachments first, then where joints turn, then
+/// the parts themselves, which are what most clicks are for.
+fn rig_pick(app: &KayeApp, rect: Rect, mouse: Pos2) -> Selection {
+    let scene = &app.scene;
+    let to_screen = app.camera.projector(rect);
+    let nearest = |spots: Vec<(Selection, Vec3)>| {
+        spots
+            .into_iter()
+            .filter_map(|(selection, at)| to_screen(at).map(|s| (selection, s.distance(mouse))))
+            .filter(|(_, d)| *d < RIG_PICK)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(selection, _)| selection)
+    };
+    let attachments = (0..scene.attachments.len())
+        .filter(|i| crate::rigging::attachment_is_live(scene, *i) && scene.part_is_visible(scene.attachments[*i].part))
+        .map(|i| (Selection::Attachment(i), crate::rigging::attachment_frame(scene, i).pos))
+        .collect();
+    if let Some(selection) = nearest(attachments) {
+        return selection;
+    }
+    if app.view.show_bones {
+        let pivots = (0..scene.bones.len())
+            .filter(|b| scene.bone_is_visible(*b))
+            .filter_map(|b| crate::rigging::pivot(scene, b).map(|p| (Selection::Bone(b), p.pos)))
+            .collect();
+        if let Some(selection) = nearest(pivots) {
+            return selection;
+        }
+    }
+    if app.view.show_parts {
+        let ray = app.camera.screen_ray(mouse, rect);
+        let mut nearest: Option<(PartId, f32)> = None;
+        let mut moved = HashMap::new();
+        for id in 0..scene.parts.len() {
+            let rig = scene.parts[id].rig;
+            if !scene.part_is_visible(id) || scene.parts[id].locked || scene.rigs[rig].kind.is_single() {
+                continue;
+            }
+            if let Some(t) = part_ray_hit(app, id, &ray, &mut moved) {
+                if nearest.is_none_or(|(_, b)| t < b) {
+                    nearest = Some((id, t));
+                }
+            }
+        }
+        if let Some((part, _)) = nearest {
+            return Selection::Part(part);
+        }
+    }
+    Selection::None
+}
+
+/// The parts whose middles a drag box catches, in the Rigging tab.
+fn parts_in_box(app: &KayeApp, rect: Rect, area: Rect) -> Vec<PartId> {
+    let scene = &app.scene;
+    let to_screen = app.camera.projector(rect);
+    (0..scene.parts.len())
+        .filter(|id| scene.part_is_visible(*id) && !scene.parts[*id].locked && !scene.rigs[scene.parts[*id].rig].kind.is_single())
+        .filter(|id| to_screen(scene.parts[*id].world.pos).is_some_and(|s| area.contains(s)))
+        .collect()
+}
+
+/// Attachments, as small rings like Studio's, in the Rigging tab.
+fn paint_attachments(app: &KayeApp, painter: &egui::Painter, rect: Rect) {
+    if app.mode != Mode::Rigging {
+        return;
+    }
+    let scene = &app.scene;
+    let to_screen = app.camera.projector(rect);
+    for index in 0..scene.attachments.len() {
+        if !crate::rigging::attachment_is_live(scene, index) || !scene.part_is_visible(scene.attachments[index].part) {
+            continue;
+        }
+        let Some(at) = to_screen(crate::rigging::attachment_frame(scene, index).pos) else {
+            continue;
+        };
+        let selected = app.selection == Selection::Attachment(index);
+        let hovered = app.hover == Selection::Attachment(index);
+        let color = if selected { theme::accent() } else if hovered { theme::accent_soft() } else { theme::bone_icon() };
+        painter.circle_filled(at, 4.5, Color32::from_black_alpha(140));
+        painter.circle_stroke(at, 4.0, Stroke::new(2.0, color));
+        painter.circle_filled(at, 1.5, color);
+    }
 }
 
 /// The bones a drag box catches: any whose drawn line touches it. With bones
@@ -694,10 +864,16 @@ fn part_items(app: &KayeApp, plain: bool) -> PartDraws {
                 continue;
             }
             let owner = scene.part_owner(id);
-            let is_selected = owner.is_some_and(|b| app.is_bone_selected(b))
-                || selected_part == Some(id)
-                || selected_rig == Some(p.rig);
-            let is_hovered = hovered_bone.is_some_and(|b| owner == Some(b));
+            let rigging = app.mode == Mode::Rigging;
+            // In the Rigging tab parts are picked themselves, and the one the others will join
+            // to stands out when there are several.
+            let is_parent = rigging && app.rigging.picks.len() > 1 && app.rigging.picks.first() == Some(&id);
+            let is_selected = if rigging {
+                app.rigging.picks.contains(&id) || selected_rig == Some(p.rig) || crate::rigging::joint_of(scene, id).is_some_and(|b| app.is_bone_selected(b))
+            } else {
+                owner.is_some_and(|b| app.is_bone_selected(b)) || selected_part == Some(id) || selected_rig == Some(p.rig)
+            };
+            let is_hovered = if rigging { app.hover == Selection::Part(id) } else { hovered_bone.is_some_and(|b| owner == Some(b)) };
             // A spawned shape's color was picked on purpose, so it always shows.
             let shown = look.part_colors || scene.rigs[p.rig].kind == RigKind::Shape;
             let rgb = if shown { p.color } else { clay };
@@ -706,6 +882,8 @@ fn part_items(app: &KayeApp, plain: bool) -> PartDraws {
             let transparency = if shown { p.transparency.max(p.material.least_transparency()) } else { p.transparency };
             let edge = if plain {
                 plain_edge
+            } else if is_parent {
+                linear(theme::camera_icon())
             } else if is_selected {
                 accent
             } else if is_hovered {

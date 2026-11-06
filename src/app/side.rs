@@ -33,13 +33,14 @@ pub fn panel(app: &mut KayeApp, ui: &mut Ui) {
             // A share of the column, so a short window or a big interface scale still
             // leaves room for Properties.
             let height = (ui.available_height() * 0.44).max(110.0);
+            let rigging = app.mode == super::rig_mode::Mode::Rigging;
             Panel::top("workspace")
                 .resizable(true)
                 .default_size(height)
                 .size_range(110.0..=640.0)
                 .frame(Frame::new())
-                .show(ui, |ui| outliner(app, ui));
-            CentralPanel::default().frame(Frame::new()).show(ui, |ui| properties(app, ui));
+                .show(ui, |ui| if rigging { super::rig_mode::workspace(app, ui) } else { outliner(app, ui) });
+            CentralPanel::default().frame(Frame::new()).show(ui, |ui| if rigging { super::rig_mode::properties(app, ui) } else { properties(app, ui) });
         });
 }
 
@@ -770,7 +771,7 @@ fn selected_tab(app: &mut KayeApp, ui: &mut Ui) {
         Selection::Rig(r) => rig_properties(app, ui, r),
         Selection::Folder(f) => folder_properties(app, ui, f),
         Selection::Onion(r) => onion_properties(app, ui, r),
-        Selection::None => scene_properties(app, ui),
+        Selection::None | Selection::Attachment(_) => scene_properties(app, ui),
     }
 }
 
@@ -846,7 +847,7 @@ fn scene_properties(app: &mut KayeApp, ui: &mut Ui) {
 
 /// What the panel is showing: an icon, the name, what kind of thing it is, and any
 /// buttons that act on the whole thing.
-fn title_row(ui: &mut Ui, icon: Icon, tint: Color32, title: &str, kind: &str, buttons: impl FnOnce(&mut Ui)) {
+pub(super) fn title_row(ui: &mut Ui, icon: Icon, tint: Color32, title: &str, kind: &str, buttons: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.add_space(2.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(15.0), Sense::hover());
@@ -860,7 +861,7 @@ fn title_row(ui: &mut Ui, icon: Icon, tint: Color32, title: &str, kind: &str, bu
 
 /// A collapsible frame, as in Maya's Attribute Editor. Sections with the same title
 /// share whether they're open, so moving between bones doesn't reset them.
-fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
+pub(super) fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
     let id = ui.make_persistent_id(("section", title));
     let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, true);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 21.0), Sense::click());
@@ -878,7 +879,7 @@ fn section(ui: &mut Ui, title: &str, content: impl FnOnce(&mut Ui)) {
 }
 
 /// One label-and-value line in the shared two-column layout.
-fn info(ui: &mut Ui, label: &str, value: &str) {
+pub(super) fn info(ui: &mut Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(LABEL_WIDTH, 18.0), Sense::hover());
         ui.painter().text(rect.right_center(), Align2::RIGHT_CENTER, label, FontId::proportional(12.0), theme::text_dim());
@@ -888,7 +889,7 @@ fn info(ui: &mut Ui, label: &str, value: &str) {
 }
 
 /// A number's text, showing only the digits it needs, as Maya's Channel Box does.
-fn channel_field(value: &mut f32, speed: f64) -> DragValue<'_> {
+pub(super) fn channel_field(value: &mut f32, speed: f64) -> DragValue<'_> {
     DragValue::new(value).speed(speed).custom_formatter(|value, _| {
         let text = format!("{value:.3}");
         let text = text.trim_end_matches('0').trim_end_matches('.');
@@ -898,7 +899,7 @@ fn channel_field(value: &mut f32, speed: f64) -> DragValue<'_> {
 
 /// One pose number: its name right-aligned against a dark field, as in Maya's Channel
 /// Box. `tint` colors it by how the value relates to the keys.
-fn channel_row(ui: &mut Ui, label: &str, field: DragValue<'_>, tint: Option<Color32>) -> egui::Response {
+pub(super) fn channel_row(ui: &mut Ui, label: &str, field: DragValue<'_>, tint: Option<Color32>) -> egui::Response {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.spacing_mut().interact_size.y = CHANNEL_HEIGHT;
@@ -1019,7 +1020,7 @@ fn bone_properties(app: &mut KayeApp, ui: &mut Ui, id: BoneId) {
 }
 
 /// A row in the Modifiers tab and camera settings: a label, then its control.
-fn prop_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
+pub(super) fn prop_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let (rect, _) = ui.allocate_exact_size(vec2(LABEL_WIDTH, 20.0), Sense::hover());

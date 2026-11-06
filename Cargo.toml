@@ -4,7 +4,7 @@
 members = ["installer"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 
 [package]
 name = "kaye"
@@ -50,6 +50,7 @@ required-features = ["devtools"]
 opt-level = 2
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Credentials", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
 
 [target.'cfg(windows)'.build-dependencies]

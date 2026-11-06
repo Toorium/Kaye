@@ -682,7 +682,8 @@ fn bones_below(scene: &Scene, bone: BoneId, into: &mut Vec<BoneId>) {
 }
 
 /// Deletes bones from the scene, and returns everything that went, so its keys can go too.
-/// A joint takes what hangs from it, since nothing would hold that up. Deleting a target
+/// A joint goes alone and leaves its limb standing where it is, see `rigging::detach`. A
+/// skinned bone takes the bones below it. Deleting a target
 /// takes its modifier, which can't work without it, and anything left that followed one
 /// of these stays where it is.
 pub fn delete_bones(scene: &mut Scene, bones: &[BoneId]) -> Vec<BoneId> {
@@ -701,6 +702,10 @@ pub fn delete_bones(scene: &mut Scene, bones: &[BoneId]) -> Vec<BoneId> {
             gone.extend(remove(scene, index));
         } else if let Some(index) = pole {
             gone.extend(remove_pole(scene, index));
+        } else if matches!(scene.bones[bone].link, BoneLink::Joint { .. }) {
+            // Only the joint goes. The limb it held stays where it is, on its own.
+            crate::rigging::detach(scene, bone);
+            gone.push(bone);
         } else if scene.bones[bone].kind.is_joint() {
             let mut below = Vec::new();
             bones_below(scene, bone, &mut below);
@@ -769,7 +774,12 @@ pub fn delete_folder(scene: &mut Scene, folder: FolderId) -> Vec<BoneId> {
 /// and with the part a rig stands on gone, there's no rig left.
 pub fn delete_part(scene: &mut Scene, part: PartId) -> Vec<BoneId> {
     match scene.parts[part].drive {
-        Drive::Bone(bone) => delete_bones(scene, &[bone]),
+        // The joint goes the usual way, which leaves the part standing alone, then the part.
+        Drive::Bone(bone) => {
+            let mut gone = delete_bones(scene, &[bone]);
+            gone.extend(crate::rigging::delete_part(scene, part));
+            gone
+        }
         Drive::Rigid { .. } => {
             scene.parts[part].removed = true;
             Vec::new()

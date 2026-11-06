@@ -247,7 +247,7 @@ fn an_animation_with_nothing_moving_says_so() {
 #[test]
 fn a_rig_with_no_joints_says_so() {
     let mut scene = sample("R15Rig.rbxm");
-    scene.rigs.push(kaye::scene::Rig { name: "Empty".to_string(), kind: kaye::scene::RigKind::Static, source_file: String::new(), parts: Vec::new(), bones: Vec::new(), visible: true, shirt: None, pants: None, placement: Xf::IDENTITY, removed: false, model: None, folder: None, onion: None });
+    scene.rigs.push(kaye::scene::Rig { name: "Empty".to_string(), kind: kaye::scene::RigKind::Static, source_file: String::new(), parts: Vec::new(), bones: Vec::new(), visible: true, shirt: None, pants: None, placement: Xf::IDENTITY, removed: false, model: None, folder: None, onion: None, prepared: false, rigged: false });
     let rig = scene.rigs.len() - 1;
     assert!(export::keyframe_sequence(&scene, &Animation::default(), rig).is_err());
 }

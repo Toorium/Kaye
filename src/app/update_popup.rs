@@ -11,6 +11,9 @@ use crate::update::{self, Release};
 
 const WIDTH: f32 = 380.0;
 const TEXT_SIZE: f32 = 12.5;
+/// Updating means taking the newer version under this license, so the popup shows it and the
+/// button says so.
+pub const LICENSE: &str = include_str!("../../LICENSE");
 
 #[derive(Default)]
 pub struct UpdatePopup {
@@ -91,12 +94,19 @@ pub fn window(app: &mut KayeApp, ctx: &egui::Context) {
             });
         }
         ui.add_space(4.0);
+        ui.label(RichText::new("License").font(theme::strong_font(TEXT_SIZE)).color(theme::ink()));
+        Frame::new().fill(theme::well()).inner_margin(Margin::same(6)).corner_radius(3).show(ui, |ui| {
+            ScrollArea::vertical().id_salt("update_license").max_height(110.0).auto_shrink([false, true]).show(ui, |ui| {
+                ui.label(RichText::new(LICENSE.trim()).size(11.5).color(theme::text()));
+            });
+        });
+        ui.add_space(4.0);
         let how = "Kaye will close, download the update and open again. Your projects, settings and backups aren't touched.";
         ui.label(RichText::new(how).size(TEXT_SIZE).color(theme::text_dim()));
         ui.add_space(8.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             theme::raised(ui);
-            let button = Button::new(RichText::new("Update").color(theme::on_accent())).fill(theme::accent()).min_size(vec2(84.0, 24.0));
+            let button = Button::new(RichText::new("Accept & Update").color(theme::on_accent())).fill(theme::accent()).min_size(vec2(120.0, 24.0));
             install = ui.add(button).clicked();
             later |= ui.add(Button::new("Later").min_size(vec2(64.0, 24.0))).clicked();
         });

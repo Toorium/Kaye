@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, HashSet};
 use egui::{Align2, Color32, ComboBox, DragValue, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
 
 use super::icons::{self, Icon};
-use super::timeline::{KEY_PICK, Layout2, ROW_HEIGHT, easing_editor, key_marker};
+use super::kept::{Kept, Signature};
+use super::timeline::{KEY_PICK, Layout2, ROW_HEIGHT, easing_editor, key_shape};
 use super::{HandleKind, KayeApp, theme};
 use crate::animation::{Animation, CHANNEL_NAMES, CHANNELS, EaseStyle, FrameNumber, HandleType, KeyId, Track, VALUE_CHANNEL, angles_near};
 use crate::gizmo::axis_colors;
@@ -74,6 +75,8 @@ pub struct GraphState {
     drag: Option<GraphDrag>,
     /// The bones the view was last set up for, active one first.
     bones: Vec<BoneId>,
+    /// The curves as last drawn, see `kept.rs`.
+    kept: Kept,
 }
 
 impl Default for GraphState {
@@ -86,6 +89,7 @@ impl Default for GraphState {
             active: None,
             drag: None,
             bones: Vec::new(),
+            kept: Kept::default(),
         }
     }
 }
@@ -171,6 +175,8 @@ struct Marker {
 fn markers(app: &KayeApp, layout: &Layout2, plot: &Plot) -> Vec<Marker> {
     let selected = &app.timeline.graph.selected;
     let mut out = Vec::new();
+    // Keys well off to the side can't be seen or clicked, unless their handles reach in.
+    let (left, right) = (layout.area.left() - 60.0, layout.area.right() + 60.0);
     for &bone in &app.timeline.graph.bones {
         let Some(track) = app.animation.tracks.get(&bone) else {
             continue;
@@ -181,7 +187,10 @@ fn markers(app: &KayeApp, layout: &Layout2, plot: &Plot) -> Vec<Marker> {
                 let point = &curves.points()[channel][index];
                 let at = |offset: [f32; 2]| pos2(layout.x(key.frame as f32 + offset[0]), plot.y(point.value + offset[1]));
                 let pos = at([0.0, 0.0]);
-                let open = [Grip::Key, Grip::Left, Grip::Right].iter().any(|grip| selected.contains(&Point { bone, frame: key.frame, channel, grip: *grip }));
+                let open = !selected.is_empty() && [Grip::Key, Grip::Left, Grip::Right].iter().any(|grip| selected.contains(&Point { bone, frame: key.frame, channel, grip: *grip }));
+                if !open && (pos.x < left || pos.x > right) {
+                    continue;
+                }
                 if open {
                     for (grip, offset) in [(Grip::Left, point.left), (Grip::Right, point.right)] {
                         if handle_shown(track, index, grip) {
@@ -529,23 +538,100 @@ fn paint_value_grid(painter: &egui::Painter, plot: &Plot) {
 
 /// Position is dashed and rotation is solid, so the two can be told apart with no
 /// help from color. Each curve also carries its name at the plot's edge.
-fn paint_curve(painter: &egui::Painter, points: Vec<Pos2>, channel: usize, strong: bool) {
+fn curve_shape(shapes: &mut Vec<Shape>, points: Vec<Pos2>, channel: usize, strong: bool) {
     let color = channel_color(channel);
     let width = if strong { 2.2 } else { 1.5 };
     if channel < 3 {
-        painter.extend(Shape::dashed_line(&points, Stroke::new(width, color), 7.0, 4.0));
+        shapes.extend(Shape::dashed_line(&points, Stroke::new(width, color), 7.0, 4.0));
     } else {
-        painter.add(Shape::line(points, Stroke::new(width, color)));
+        shapes.push(Shape::line(points, Stroke::new(width, color)));
     }
 }
 
-pub(super) fn paint(app: &KayeApp, ui: &Ui, layout: &Layout2) {
+pub(super) fn paint(app: &mut KayeApp, ui: &Ui, layout: &Layout2) {
     let plot = Plot::new(app, layout);
     let painter = ui.painter_at(layout.area);
     paint_value_grid(&painter, &plot);
+    paint_curve_names(app, &painter, layout, &plot);
+    // Curves, handles and keys only change when keys, the selection or the view do, so
+    // playing back reuses them.
+    let signature = curves_signature(app, layout, &plot);
+    let mut kept = std::mem::take(&mut app.timeline.graph.kept);
+    let shape = kept.shape(ui.ctx(), signature, |shapes| curve_shapes(app, layout, &plot, shapes));
+    app.timeline.graph.kept = kept;
+    painter.add(shape);
+    let graph = &app.timeline.graph;
+    if let (Some(GraphDrag::Box { anchor, .. }), Some(mouse)) = (&graph.drag, ui.input(|i| i.pointer.latest_pos())) {
+        let area = Rect::from_two_pos(*anchor, mouse).intersect(layout.area);
+        painter.rect_filled(area, 0.0, theme::accent().gamma_multiply(0.14));
+        painter.rect_stroke(area, 0.0, Stroke::new(1.0, theme::accent()), StrokeKind::Inside);
+    }
+}
+
+/// The x of the last column a curve is drawn through.
+fn last_column(plot: &Plot) -> f32 {
+    plot.rect.left() + (plot.rect.width() / CURVE_COLUMN).floor() * CURVE_COLUMN
+}
+
+/// Each curve's name where it leaves the plot.
+fn paint_curve_names(app: &KayeApp, painter: &egui::Painter, layout: &Layout2, plot: &Plot) {
     let graph = &app.timeline.graph;
     let several = graph.bones.len() > 1;
     let mut labels: Vec<f32> = Vec::new();
+    let x = last_column(plot);
+    for &bone in &graph.bones {
+        let Some(track) = app.animation.tracks.get(&bone) else {
+            continue;
+        };
+        let curves = app.animation.curves_of(&app.scene, bone, track);
+        let Some(values) = curves.at(layout.frame_at(x)) else {
+            continue;
+        };
+        for channel in visible_channels(app, bone) {
+            let end = pos2(x, plot.y(values[channel]));
+            // Curves that end together would stack their names into a smudge.
+            if labels.iter().any(|y| (y - end.y).abs() < 11.0) || !plot.rect.y_range().contains(end.y) {
+                continue;
+            }
+            labels.push(end.y);
+            let name = match channel {
+                VALUE_CHANNEL => "V".to_string(),
+                c => format!("{}{}", if c < 3 { "P" } else { "R" }, ["X", "Y", "Z"][c % 3]),
+            };
+            let name = if several { format!("{} {name}", app.scene.bones[bone].name) } else { name };
+            painter.text(end + vec2(-3.0, -1.0), Align2::RIGHT_BOTTOM, name, FontId::proportional(10.0), channel_color(channel));
+        }
+    }
+}
+
+/// Everything the curves' drawing depends on.
+fn curves_signature(app: &KayeApp, layout: &Layout2, plot: &Plot) -> u64 {
+    let graph = &app.timeline.graph;
+    let mut s = Signature::new();
+    s.add_rect(plot.rect);
+    s.add_f32(plot.low);
+    s.add_f32(plot.high);
+    s.add_f32(layout.start);
+    s.add_f32(layout.end);
+    s.add_f32(app.settings.animation.key_size);
+    s.add(app.animation.smoothing as u8);
+    for color in axis_colors().into_iter().chain([theme::ink(), theme::accent(), theme::text_faint(), theme::window()]) {
+        s.add_color(color);
+    }
+    for &bone in &graph.bones {
+        s.add(bone);
+        s.add(app.animation.tracks.get(&bone).map_or(0, |t| t.keys.generation()));
+        s.add(channel_count(app, bone));
+        s.add(app.animation.wrap_of(app.scene.bones[bone].rig).map(|w| (w.start, w.end)));
+    }
+    s.add_set(graph.hidden.iter());
+    s.add_set(graph.selected.iter());
+    s.add(graph.active);
+    s.finish()
+}
+
+fn curve_shapes(app: &KayeApp, layout: &Layout2, plot: &Plot, shapes: &mut Vec<Shape>) {
+    let graph = &app.timeline.graph;
     for &bone in &graph.bones {
         let Some(track) = app.animation.tracks.get(&bone) else {
             continue;
@@ -564,39 +650,25 @@ pub(super) fn paint(app: &KayeApp, ui: &Ui, layout: &Layout2) {
         }
         for (line, channel) in lines.into_iter().zip(&channels) {
             let strong = graph.active.is_some_and(|p| p.bone == bone && p.channel == *channel);
-            if let Some(end) = line.last().copied() {
-                // Curves that end together would stack their names into a smudge.
-                if !labels.iter().any(|y| (y - end.y).abs() < 11.0) && plot.rect.y_range().contains(end.y) {
-                    labels.push(end.y);
-                    let name = match *channel {
-                        VALUE_CHANNEL => "V".to_string(),
-                        c => format!("{}{}", if c < 3 { "P" } else { "R" }, ["X", "Y", "Z"][c % 3]),
-                    };
-                    let name = if several { format!("{} {name}", app.scene.bones[bone].name) } else { name };
-                    painter.text(end + vec2(-3.0, -1.0), Align2::RIGHT_BOTTOM, name, FontId::proportional(10.0), channel_color(*channel));
-                }
-            }
-            paint_curve(&painter, line, *channel, strong);
+            curve_shape(shapes, line, *channel, strong);
         }
     }
-    let all = markers(app, layout, &plot);
+    let all = markers(app, layout, plot);
     for marker in all.iter().filter(|m| m.point.grip != Grip::Key) {
         let selected = graph.active == Some(marker.point);
-        painter.line_segment([marker.key, marker.pos], Stroke::new(1.0, theme::text_faint()));
+        shapes.push(Shape::line_segment([marker.key, marker.pos], Stroke::new(1.0, theme::text_faint())));
         let fill = if selected { theme::accent() } else { theme::ink() };
-        painter.circle(marker.pos, HANDLE_RADIUS, fill, Stroke::new(1.0, theme::window()));
+        shapes.push(Shape::circle_filled(marker.pos, HANDLE_RADIUS, fill));
+        shapes.push(Shape::circle_stroke(marker.pos, HANDLE_RADIUS, Stroke::new(1.0, theme::window())));
     }
     let size = app.settings.animation.key_size;
-    for marker in all.iter().filter(|m| m.point.grip == Grip::Key) {
+    let margin = size * 2.0;
+    let shown = plot.rect.expand(margin);
+    for marker in all.iter().filter(|m| m.point.grip == Grip::Key && shown.contains(m.pos)) {
         let selected = graph.selected.contains(&marker.point);
         let fill = if selected { theme::accent() } else { channel_color(marker.point.channel) };
         let square = app.animation.key_at(marker.point.bone, marker.point.frame).is_some_and(|k| k.easing.style == EaseStyle::Constant);
-        key_marker(&painter, marker.pos, size, square, fill);
-    }
-    if let (Some(GraphDrag::Box { anchor, .. }), Some(mouse)) = (&graph.drag, ui.input(|i| i.pointer.latest_pos())) {
-        let area = Rect::from_two_pos(*anchor, mouse).intersect(layout.area);
-        painter.rect_filled(area, 0.0, theme::accent().gamma_multiply(0.14));
-        painter.rect_stroke(area, 0.0, Stroke::new(1.0, theme::accent()), StrokeKind::Inside);
+        key_shape(shapes, marker.pos, size, square, fill);
     }
 }
 

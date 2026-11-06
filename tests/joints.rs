@@ -227,6 +227,7 @@ fn an_old_project_gets_its_loose_accessory_attached() {
         preview: false,
         through: false,
         motion_paths: Vec::new(),
+        references: Vec::new(),
     };
     let path = std::env::temp_dir().join(format!("kaye-old-hat-{}.kaye", std::process::id()));
     kaye::project::save(&path, &s, &animation, &view).unwrap();

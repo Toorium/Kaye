@@ -62,7 +62,7 @@ const ROOT_JOINT: &str = "RootJoint";
 pub const FOV_ATTRIBUTE: &str = "FieldOfView";
 const CAMERA_COLOR: Color3 = Color3 { r: 0.26, g: 0.55, b: 0.95 };
 
-fn cframe(xf: Xf) -> CFrame {
+pub(crate) fn cframe(xf: Xf) -> CFrame {
     let m = glam::Mat3::from_quat(xf.rot);
     CFrame::new(
         Vector3::new(xf.pos.x, xf.pos.y, xf.pos.z),
@@ -193,13 +193,13 @@ pub fn keyframe_sequence(scene: &Scene, animation: &Animation, rig: RigId) -> Re
 
 /// Moves the rig's parts to where it was placed in Kaye. Everything else in a model is
 /// relative to its parts, apart from where a Model keeps its pivot.
-fn apply_placement(dom: &mut WeakDom, placement: Xf) {
+fn apply_placement(dom: &mut WeakDom, placement: Xf, parts: bool) {
     let refs: Vec<Ref> = dom.descendants().map(|i| i.referent()).collect();
     for r in refs {
         let Some(inst) = dom.get_by_ref_mut(r) else {
             continue;
         };
-        let is_part = inst.properties.contains_key(&ustr("Size"));
+        let is_part = parts && inst.properties.contains_key(&ustr("Size"));
         if let (true, Some(Variant::CFrame(at))) = (is_part, inst.properties.get_mut(&ustr("CFrame"))) {
             *at = cframe(placement * Xf::from_cframe(at));
         }
@@ -512,8 +512,15 @@ fn model_with(scene: &Scene, rig: RigId, sequences: Vec<WeakDom>) -> Result<Weak
         return Err("This project doesn't have the rig's original model. Import the rig again, then animate that one.".to_string());
     };
     let mut dom = rbx_binary::from_reader(original.as_slice()).map_err(|e| e.to_string())?;
-    if !scene.rigs[rig].placement.approx_eq(Xf::IDENTITY) {
-        apply_placement(&mut dom, scene.rigs[rig].placement);
+    let placement = scene.rigs[rig].placement;
+    if scene.rigs[rig].rigged {
+        // This puts every part where it stands, placement and all.
+        crate::rigging::write_into(&mut dom, scene, rig)?;
+        if !placement.approx_eq(Xf::IDENTITY) {
+            apply_placement(&mut dom, placement, false);
+        }
+    } else if !placement.approx_eq(Xf::IDENTITY) {
+        apply_placement(&mut dom, placement, true);
     }
 
     // A file of loose parts has no model to hold anything, and Studio's Animation Editor

@@ -6,9 +6,12 @@ use egui::{Align, Align2, Button, Color32, DragValue, FontId, Frame, Layout, Pan
 
 use super::chrome::{self, colored_icon_button, icon_button};
 use super::graph;
+use super::references;
 use super::icons::{self, Icon};
+use super::kept::{Kept, Signature};
 use super::{BottomTab, HandleKind, KayeApp, Selection, theme};
-use crate::animation::{Animation, EaseDirection, EaseStyle, FrameNumber, HandleType, KeyId};
+use crate::animation::{Animation, EaseDirection, EaseStyle, FrameNumber, HandleType, Key, KeyId};
+use crate::reference::{Edge, Reference};
 use crate::scene::BoneId;
 use crate::settings::Action;
 
@@ -23,6 +26,10 @@ pub(super) const ROW_HEIGHT: f32 = 20.0;
 pub(super) const KEY_PICK: f32 = 7.0;
 /// The strip at the left of a bone's row that opens its channels.
 const EXPANDER_WIDTH: f32 = 15.0;
+/// The eye at the right of a reference's row.
+const EYE_WIDTH: f32 = 22.0;
+/// How close to a strip's end a drag trims it instead of moving it.
+const STRIP_EDGE: f32 = 6.0;
 
 pub struct TimelineState {
     view_start: f32,
@@ -43,6 +50,8 @@ pub struct TimelineState {
     pub open_channels: HashSet<BoneId>,
     /// The channel row a right click landed on, for taking just that channel out of keys.
     menu_channel: Option<usize>,
+    /// The keys as last drawn, see `kept.rs`.
+    kept: Kept,
 }
 
 impl Default for TimelineState {
@@ -61,6 +70,7 @@ impl Default for TimelineState {
             animation_search: String::new(),
             open_channels: HashSet::new(),
             menu_channel: None,
+            kept: Kept::default(),
         }
     }
 }
@@ -76,6 +86,13 @@ enum Drag {
     BoxSelect {
         anchor: Pos2,
         base: HashSet<KeyId>,
+    },
+    /// A reference strip, moved whole or by one end. `grab` is the frame the mouse took it at.
+    Strip {
+        id: u64,
+        edge: Option<Edge>,
+        grab: f64,
+        before: Reference,
     },
 }
 
@@ -94,6 +111,12 @@ pub fn cancel_drag(app: &mut KayeApp) -> bool {
         }
         Some(Drag::BoxSelect { base, .. }) => {
             app.timeline.selected = base;
+            true
+        }
+        Some(Drag::Strip { before, .. }) => {
+            if let Some(reference) = app.scene.references.iter_mut().find(|r| r.id == before.id) {
+                *reference = before;
+            }
             true
         }
         Some(Drag::Scrub) => true,
@@ -360,12 +383,15 @@ enum TrackRow {
     Bone(BoneId),
     /// One of a bone's channels, open under it, with only the keys that set it.
     Channel(BoneId, usize),
+    /// A reference's strip, by its place in `Scene::references`.
+    Reference(usize),
 }
 
 /// The rows the track list shows, top to bottom: the summary, then each bone with any
 /// channels open under it.
 fn track_rows(app: &KayeApp, bones: &[BoneId]) -> Vec<TrackRow> {
     let mut rows = vec![TrackRow::Summary];
+    rows.extend((0..app.scene.references.len()).map(TrackRow::Reference));
     for &bone in bones {
         rows.push(TrackRow::Bone(bone));
         if app.timeline.open_channels.contains(&bone) && app.animation.tracks.contains_key(&bone) {
@@ -622,6 +648,7 @@ fn keys_at(app: &KayeApp, layout: &Layout2, bones: &[BoneId], pos: Pos2) -> Vec<
         TrackRow::Summary => (None, None),
         TrackRow::Bone(bone) => (Some(bone), None),
         TrackRow::Channel(bone, channel) => (Some(bone), Some(channel)),
+        TrackRow::Reference(_) => return Vec::new(),
     };
     let Some(bone) = bone else {
         let frames = app.animation.key_frames(bones);
@@ -653,9 +680,22 @@ fn key_input(app: &mut KayeApp, ui: &mut Ui, layout: &Layout2, response: &egui::
         )
     });
 
+    // A strip's ends can be dragged, so the mouse says so over them.
+    if app.timeline.drag.is_none() {
+        if let Some(pos) = response.hover_pos() {
+            if let Some((_, edge)) = strip_at(app, layout, bones, pos) {
+                ui.ctx().set_cursor_icon(if edge.is_some() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::Grab });
+            }
+        }
+    }
+
     if pressed && app.timeline.drag.is_none() {
         if let Some(pos) = response.hover_pos() {
-            if layout.area.contains(pos) {
+            if let Some((index, edge)) = strip_at(app, layout, bones, pos) {
+                app.pause();
+                let before = app.scene.references[index].clone();
+                app.timeline.drag = Some(Drag::Strip { id: before.id, edge, grab: layout.frame_at(pos.x) as f64, before });
+            } else if layout.area.contains(pos) {
                 let hit = keys_at(app, layout, bones, pos);
                 if hit.is_empty() {
                     let base = if shift { app.timeline.selected.clone() } else { HashSet::new() };
@@ -697,6 +737,16 @@ fn key_input(app: &mut KayeApp, ui: &mut Ui, layout: &Layout2, response: &egui::
                     Some(TrackRow::Bone(bone) | TrackRow::Channel(bone, _)) => {
                         app.select(Selection::Bone(bone));
                         app.scroll_to_selection = true;
+                    }
+                    // The eye at the right shows and hides the window, and the rest of the
+                    // row brings it up.
+                    Some(TrackRow::Reference(index)) => {
+                        let id = app.scene.references[index].id;
+                        if pos.x > layout.side.right() - EYE_WIDTH && app.references.is_open(id) {
+                            app.references.hide(id);
+                        } else {
+                            app.references.show(id);
+                        }
                     }
                     None => {}
                 }
@@ -758,16 +808,59 @@ fn key_input(app: &mut KayeApp, ui: &mut Ui, layout: &Layout2, response: &egui::
                 app.timeline.drag = None;
             }
         }
+        Some(Drag::Strip { id, edge, grab, before }) => {
+            let (id, edge, grab) = (*id, *edge, *grab);
+            let mut moved = before.clone();
+            let rate = references::rate(app, &moved);
+            // Whole frames, so a strip lines up with keys.
+            let at = layout.frame_at(mouse.x) as f64;
+            match edge {
+                None => moved.move_by((at - grab).round()),
+                Some(edge) => moved.drag_edge(edge, at.round(), rate),
+            }
+            if let Some(reference) = app.scene.references.iter_mut().find(|r| r.id == id) {
+                *reference = moved;
+            }
+            if released {
+                app.timeline.drag = None;
+            }
+        }
         _ => {}
     }
 }
 
-pub(super) fn key_marker(painter: &egui::Painter, center: Pos2, radius: f32, square: bool, fill: Color32) {
+/// The reference strip under the mouse, and which end of it if it's near one.
+fn strip_at(app: &KayeApp, layout: &Layout2, bones: &[BoneId], pos: Pos2) -> Option<(usize, Option<Edge>)> {
+    if !layout.area.contains(pos) {
+        return None;
+    }
+    let rows = track_rows(app, bones);
+    let Some(TrackRow::Reference(index)) = hit_row(app, layout, pos.y, rows.len()).map(|r| rows[r]) else {
+        return None;
+    };
+    let reference = &app.scene.references[index];
+    let (start, end) = reference.span(references::rate(app, reference));
+    let (left, right) = (layout.x(start as f32), layout.x(end as f32));
+    // A short strip still keeps some middle to grab.
+    let reach = STRIP_EDGE.min((right - left) * 0.3);
+    if (pos.x - left).abs() <= reach {
+        Some((index, Some(Edge::Start)))
+    } else if (pos.x - right).abs() <= reach {
+        Some((index, Some(Edge::End)))
+    } else if pos.x > left && pos.x < right {
+        Some((index, None))
+    } else {
+        None
+    }
+}
+
+/// A key's diamond, or a square for one that holds.
+pub(super) fn key_shape(shapes: &mut Vec<Shape>, center: Pos2, radius: f32, square: bool, fill: Color32) {
     let outline = Stroke::new(1.0, theme::window());
     if square {
         let rect = Rect::from_center_size(center, Vec2::splat(radius * 1.6));
-        painter.rect_filled(rect, 0.0, fill);
-        painter.rect_stroke(rect, 0.0, outline, StrokeKind::Outside);
+        shapes.push(Shape::rect_filled(rect, 0.0, fill));
+        shapes.push(Shape::rect_stroke(rect, 0.0, outline, StrokeKind::Outside));
     } else {
         let points = vec![
             center - vec2(0.0, radius),
@@ -775,52 +868,50 @@ pub(super) fn key_marker(painter: &egui::Painter, center: Pos2, radius: f32, squ
             center + vec2(0.0, radius),
             center - vec2(radius, 0.0),
         ];
-        painter.add(Shape::convex_polygon(points, fill, outline));
+        shapes.push(Shape::convex_polygon(points, fill, outline));
     }
 }
 
-fn paint_tracks(app: &KayeApp, ui: &Ui, layout: &Layout2, bones: &[BoneId]) {
+fn paint_tracks(app: &mut KayeApp, ui: &Ui, layout: &Layout2, bones: &[BoneId]) {
     let list = Rect::from_min_max(pos2(layout.side.left(), layout.area.top()), layout.side.max);
     ui.painter().rect_filled(layout.side, 0.0, theme::panel());
     let list_painter = ui.painter_at(list);
     let key_painter = ui.painter_at(layout.area);
     let full = list.union(layout.area);
     let row_painter = ui.painter_at(full);
+    let rows = track_rows(app, bones);
 
     // The summary row sits first and collects every key in the rig.
     let center = row_y(app, layout, 0);
     let row_rect = |y: f32| Rect::from_center_size(pos2(full.center().x, y), vec2(full.width(), ROW_HEIGHT));
     row_painter.rect_filled(row_rect(center), 0.0, theme::header());
     list_painter.text(pos2(list.left() + 8.0, center), Align2::LEFT_CENTER, "Summary", theme::strong_font(11.5), theme::text());
-    // Every keyed frame, and whether all its keys are picked, in one pass over the keys.
-    let mut frames: std::collections::BTreeMap<FrameNumber, bool> = std::collections::BTreeMap::new();
-    for bone in bones {
-        for key in app.animation.tracks.get(bone).map_or(&[][..], |t| &t.keys[..]) {
-            *frames.entry(key.frame).or_insert(true) &= app.timeline.selected.contains(&(*bone, key.frame));
-        }
-    }
-    for (frame, selected) in frames {
-        let fill = if selected { theme::accent() } else { theme::text_dim() };
-        key_marker(&key_painter, pos2(layout.x(frame as f32), center), app.settings.animation.key_size - 1.0, false, fill);
-    }
 
     let mut shaded = false;
-    for (row, kind) in track_rows(app, bones).into_iter().enumerate().skip(1) {
+    for (row, kind) in rows.iter().copied().enumerate().skip(1) {
         let y = row_y(app, layout, row);
+        let on_screen = y + ROW_HEIGHT >= full.top() && y - ROW_HEIGHT <= full.bottom();
         let bone = match kind {
             TrackRow::Bone(bone) => {
                 shaded = !shaded;
                 bone
             }
             TrackRow::Channel(bone, channel) => {
-                if y + ROW_HEIGHT >= full.top() && y - ROW_HEIGHT <= full.bottom() {
-                    paint_channel_row(app, &list_painter, &key_painter, layout, list, y, bone, channel);
+                if on_screen {
+                    paint_channel_name(app, &list_painter, list, y, bone, channel);
+                }
+                continue;
+            }
+            TrackRow::Reference(index) => {
+                if on_screen {
+                    row_painter.rect_filled(row_rect(y), 0.0, Color32::from_black_alpha(28));
+                    paint_reference_row(app, &list_painter, &key_painter, layout, list, y, index);
                 }
                 continue;
             }
             TrackRow::Summary => continue,
         };
-        if y + ROW_HEIGHT < full.top() || y - ROW_HEIGHT > full.bottom() {
+        if !on_screen {
             continue;
         }
         let selected = app.is_bone_selected(bone);
@@ -829,8 +920,7 @@ fn paint_tracks(app: &KayeApp, ui: &Ui, layout: &Layout2, bones: &[BoneId]) {
         } else if shaded {
             row_painter.rect_filled(row_rect(y), 0.0, Color32::from_white_alpha(4));
         }
-        let track = app.animation.tracks.get(&bone);
-        if track.is_some() {
+        if app.animation.tracks.contains_key(&bone) {
             let open = app.timeline.open_channels.contains(&bone);
             chrome::paint_triangle(&list_painter, pos2(list.left() + 8.0, y), open, if selected { theme::ink() } else { theme::text_dim() });
         }
@@ -843,47 +933,201 @@ fn paint_tracks(app: &KayeApp, ui: &Ui, layout: &Layout2, bones: &[BoneId]) {
             FontId::proportional(12.0),
             if selected { theme::ink() } else { theme::text_dim() },
         );
-        let Some(track) = track else {
+    }
+
+    // Keys and the bars between them only change when keys, the selection or the view do,
+    // so playing back reuses them.
+    let signature = keys_signature(app, layout, bones, &rows);
+    let mut kept = std::mem::take(&mut app.timeline.kept);
+    let shape = kept.shape(ui.ctx(), signature, |shapes| key_shapes(app, layout, bones, &rows, shapes));
+    app.timeline.kept = kept;
+    key_painter.add(shape);
+}
+
+/// Everything the keys' drawing depends on.
+fn keys_signature(app: &KayeApp, layout: &Layout2, bones: &[BoneId], rows: &[TrackRow]) -> u64 {
+    let mut s = Signature::new();
+    s.add_rect(layout.area);
+    s.add_f32(layout.start);
+    s.add_f32(layout.end);
+    s.add_f32(app.timeline.scroll);
+    s.add_f32(app.settings.animation.key_size);
+    for color in [theme::accent(), theme::ink(), theme::text(), theme::text_dim(), theme::window()] {
+        s.add_color(color);
+    }
+    for row in rows {
+        match *row {
+            TrackRow::Summary => s.add(0u8),
+            TrackRow::Bone(bone) => s.add((1u8, bone)),
+            TrackRow::Channel(bone, channel) => s.add((2u8, bone, channel)),
+            TrackRow::Reference(index) => s.add((3u8, index)),
+        }
+    }
+    for bone in bones {
+        s.add(app.animation.tracks.get(bone).map_or(0, |t| t.keys.generation()));
+    }
+    s.add_set(app.timeline.selected.iter());
+    s.finish()
+}
+
+/// The keys of a track that can show between these frames, plus one on each side so a bar
+/// running off the edge still draws.
+fn keys_in_view<'a>(keys: &'a [Key], layout: &Layout2, pad: f32) -> &'a [Key] {
+    let first = layout.frame_at(layout.area.left() - pad).floor() as FrameNumber;
+    let last = layout.frame_at(layout.area.right() + pad).ceil() as FrameNumber;
+    let start = keys.partition_point(|k| k.frame < first).saturating_sub(1);
+    let end = (keys.partition_point(|k| k.frame <= last) + 1).min(keys.len());
+    &keys[start..end.max(start)]
+}
+
+/// Leaves out a marker landing on the one just drawn, which would be hidden under it anyway.
+/// Only happens once whole frames are narrower than a pixel.
+struct Markers {
+    last: Option<(f32, Color32, bool)>,
+}
+
+impl Markers {
+    fn new() -> Self {
+        Self { last: None }
+    }
+
+    fn add(&mut self, shapes: &mut Vec<Shape>, center: Pos2, radius: f32, square: bool, fill: Color32) {
+        if self.last.is_some_and(|(x, f, s)| (center.x - x).abs() < 0.5 && f == fill && s == square) {
+            return;
+        }
+        self.last = Some((center.x, fill, square));
+        key_shape(shapes, center, radius, square, fill);
+    }
+}
+
+/// Bars between keys, with neighbors of the same kind joined into one line.
+fn add_bars(shapes: &mut Vec<Shape>, bars: impl Iterator<Item = (f32, f32, Stroke)>, y: f32) {
+    let mut run: Option<(f32, f32, Stroke)> = None;
+    for (a, b, stroke) in bars {
+        run = match run {
+            Some((start, end, s)) if s == stroke && (a - end).abs() < 0.01 => Some((start, b, s)),
+            Some((start, end, s)) => {
+                shapes.push(Shape::hline(start..=end, y, s));
+                Some((a, b, stroke))
+            }
+            None => Some((a, b, stroke)),
+        };
+    }
+    if let Some((start, end, s)) = run {
+        shapes.push(Shape::hline(start..=end, y, s));
+    }
+}
+
+fn key_shapes(app: &KayeApp, layout: &Layout2, bones: &[BoneId], rows: &[TrackRow], shapes: &mut Vec<Shape>) {
+    let size = app.settings.animation.key_size;
+    let pad = size * 2.0;
+    let area = layout.area;
+    // Every keyed frame on screen, and whether all its keys are picked.
+    let center = row_y(app, layout, 0);
+    let mut frames: std::collections::BTreeMap<FrameNumber, bool> = std::collections::BTreeMap::new();
+    for bone in bones {
+        let Some(track) = app.animation.tracks.get(bone) else {
             continue;
         };
-        for pair in track.keys.windows(2) {
-            let (a, b) = (layout.x(pair[0].frame as f32), layout.x(pair[1].frame as f32));
-            // A solid bar means the pose holds still between these keys.
-            let still = pair[0].pose.approx_eq(pair[1].pose) || pair[0].easing.style == EaseStyle::Constant;
-            let stroke = if still {
-                Stroke::new(3.0, Color32::from_white_alpha(28))
-            } else {
-                Stroke::new(1.0, Color32::from_white_alpha(28))
-            };
-            key_painter.hline(a..=b, y, stroke);
+        for key in keys_in_view(&track.keys, layout, pad) {
+            *frames.entry(key.frame).or_insert(true) &= app.timeline.selected.contains(&(*bone, key.frame));
         }
-        for key in &track.keys {
-            let is_selected = app.timeline.selected.contains(&(bone, key.frame));
-            let fill = if is_selected { theme::accent() } else { theme::ink() };
-            let square = key.easing.style == EaseStyle::Constant;
-            key_marker(&key_painter, pos2(layout.x(key.frame as f32), y), app.settings.animation.key_size, square, fill);
+    }
+    let mut markers = Markers::new();
+    for (frame, selected) in frames {
+        let fill = if selected { theme::accent() } else { theme::text_dim() };
+        markers.add(shapes, pos2(layout.x(frame as f32), center), size - 1.0, false, fill);
+    }
+
+    for (row, kind) in rows.iter().copied().enumerate().skip(1) {
+        let y = row_y(app, layout, row);
+        if y + ROW_HEIGHT < area.top() || y - ROW_HEIGHT > area.bottom() {
+            continue;
+        }
+        let (bone, channel) = match kind {
+            TrackRow::Bone(bone) => (bone, None),
+            TrackRow::Channel(bone, channel) => (bone, Some(channel)),
+            TrackRow::Summary | TrackRow::Reference(_) => continue,
+        };
+        let Some(track) = app.animation.tracks.get(&bone) else {
+            continue;
+        };
+        let keys = keys_in_view(&track.keys, layout, pad);
+        let mut markers = Markers::new();
+        match channel {
+            None => {
+                let bars = keys.windows(2).map(|pair| {
+                    // A solid bar means the pose holds still between these keys.
+                    let still = pair[0].pose.approx_eq(pair[1].pose) || pair[0].easing.style == EaseStyle::Constant;
+                    let width = if still { 3.0 } else { 1.0 };
+                    (layout.x(pair[0].frame as f32), layout.x(pair[1].frame as f32), Stroke::new(width, Color32::from_white_alpha(28)))
+                });
+                add_bars(shapes, bars, y);
+                for key in keys {
+                    let fill = if app.timeline.selected.contains(&(bone, key.frame)) { theme::accent() } else { theme::ink() };
+                    markers.add(shapes, pos2(layout.x(key.frame as f32), y), size, key.easing.style == EaseStyle::Constant, fill);
+                }
+            }
+            Some(channel) => {
+                // The channel's keys are only the ones that set it, so a bar can skip keys
+                // that don't, and has to start from the last one before the view.
+                let all = &track.keys[..];
+                let first = keys.first().map_or(0, |k| all.partition_point(|a| a.frame < k.frame));
+                let before = all[..first].iter().rev().find(|k| k.sets(channel));
+                let last = keys.last().map_or(0, |k| all.partition_point(|a| a.frame <= k.frame));
+                let after = all[last..].iter().find(|k| k.sets(channel));
+                let set: Vec<&Key> = before.into_iter().chain(keys.iter().filter(|k| k.sets(channel))).chain(after).collect();
+                let bars = set.windows(2).map(|pair| (layout.x(pair[0].frame as f32), layout.x(pair[1].frame as f32), Stroke::new(1.0, Color32::from_white_alpha(20))));
+                add_bars(shapes, bars, y);
+                for key in set {
+                    let fill = if app.timeline.selected.contains(&(bone, key.frame)) { theme::accent() } else { theme::text() };
+                    markers.add(shapes, pos2(layout.x(key.frame as f32), y), size - 1.0, key.easing.style == EaseStyle::Constant, fill);
+                }
+            }
         }
     }
 }
 
-/// One channel open under its bone: its name, and only the keys that set it.
-#[allow(clippy::too_many_arguments)]
-fn paint_channel_row(app: &KayeApp, list_painter: &egui::Painter, key_painter: &egui::Painter, layout: &Layout2, list: Rect, y: f32, bone: BoneId, channel: usize) {
+/// A reference's row: its name and eye on the left, and its strip on the timeline.
+fn paint_reference_row(app: &KayeApp, list_painter: &egui::Painter, key_painter: &egui::Painter, layout: &Layout2, list: Rect, y: f32, index: usize) {
+    let reference = &app.scene.references[index];
+    let open = app.references.is_open(reference.id);
+    let picture = reference.is_picture() && crate::media::MediaKind::of(std::path::Path::new(&reference.path)) == Some(crate::media::MediaKind::Picture);
+    let icon = if picture { Icon::Image } else { Icon::Animations };
+    icons::paint(list_painter, Rect::from_center_size(pos2(list.left() + 22.0, y), Vec2::splat(13.0)), icon, theme::camera_icon());
+    list_painter.text(pos2(list.left() + 33.0, y), Align2::LEFT_CENTER, &reference.name, FontId::proportional(12.0), theme::text_dim());
+    let eye = Rect::from_center_size(pos2(list.right() - EYE_WIDTH * 0.5, y), Vec2::splat(13.0));
+    icons::paint(list_painter, eye, if open { Icon::Eye } else { Icon::EyeOff }, theme::text_dim());
+
+    let (start, end) = reference.span(references::rate(app, reference));
+    let strip = Rect::from_min_max(pos2(layout.x(start as f32), y - ROW_HEIGHT * 0.5 + 2.0), pos2(layout.x(end as f32), y + ROW_HEIGHT * 0.5 - 2.0));
+    let color = theme::camera_icon();
+    let dragged = matches!(&app.timeline.drag, Some(Drag::Strip { id, .. }) if *id == reference.id);
+    key_painter.rect_filled(strip, 3.0, color.gamma_multiply(if dragged { 0.55 } else { 0.35 }));
+    key_painter.rect_stroke(strip, 3.0, Stroke::new(1.0, color), StrokeKind::Inside);
+    // Grips at both ends say they can be dragged.
+    for x in [strip.left() + 3.5, strip.right() - 3.5] {
+        if strip.width() > 14.0 {
+            key_painter.vline(x, strip.shrink2(vec2(0.0, 3.0)).y_range(), Stroke::new(1.0, color));
+        }
+    }
+    if let Some(progress) = app.references.loading(reference.id) {
+        let bar = Rect::from_min_size(strip.left_bottom() - vec2(0.0, 2.0), vec2(strip.width() * progress, 2.0));
+        key_painter.rect_filled(bar, 0.0, theme::ink());
+    }
+    // Only clipped at the sides, since Tahoma sits a little low in its line.
+    let text_area = Rect::from_x_y_ranges(strip.shrink2(vec2(8.0, 0.0)).x_range(), (y - ROW_HEIGHT * 0.5)..=(y + ROW_HEIGHT * 0.5)).intersect(layout.area);
+    if text_area.width() > 8.0 {
+        key_painter.with_clip_rect(text_area).text(pos2(text_area.left(), y - 1.0), Align2::LEFT_CENTER, &reference.name, FontId::proportional(11.0), theme::ink());
+    }
+}
+
+/// One channel open under its bone: its name beside the keys that set it.
+fn paint_channel_name(app: &KayeApp, list_painter: &egui::Painter, list: Rect, y: f32, bone: BoneId, channel: usize) {
     list_painter.hline(list.left() + 30.0..=list.right(), y - ROW_HEIGHT * 0.5, Stroke::new(1.0, Color32::from_white_alpha(6)));
     let swatch = Rect::from_center_size(pos2(list.left() + 36.0, y), vec2(3.0, 11.0));
     list_painter.rect_filled(swatch, 1.0, graph::channel_color(channel));
     list_painter.text(pos2(list.left() + 44.0, y), Align2::LEFT_CENTER, graph::channel_name(app, bone, channel), FontId::proportional(11.5), theme::text_dim());
-    let Some(track) = app.animation.tracks.get(&bone) else {
-        return;
-    };
-    let keys: Vec<_> = track.keys.iter().filter(|k| k.sets(channel)).collect();
-    for pair in keys.windows(2) {
-        key_painter.hline(layout.x(pair[0].frame as f32)..=layout.x(pair[1].frame as f32), y, Stroke::new(1.0, Color32::from_white_alpha(20)));
-    }
-    for key in keys {
-        let fill = if app.timeline.selected.contains(&(bone, key.frame)) { theme::accent() } else { theme::text() };
-        key_marker(key_painter, pos2(layout.x(key.frame as f32), y), app.settings.animation.key_size - 1.0, key.easing.style == EaseStyle::Constant, fill);
-    }
 }
 
 /// Shows and edits how a span eases, inside `area`.
@@ -984,14 +1228,45 @@ pub enum MenuTarget {
     Keys,
     Empty(FrameNumber),
     Ruler(FrameNumber),
+    Reference(u64),
+}
+
+fn reference_menu(app: &mut KayeApp, ui: &mut Ui, id: u64) {
+    let open = app.references.is_open(id);
+    if chrome::item(ui, if open { "Hide Window" } else { "Show Window" }, "", true) {
+        if open {
+            app.references.hide(id);
+        } else {
+            app.references.show(id);
+        }
+    }
+    if chrome::item(ui, "Start Here", "", true) {
+        // Lines the strip's start up with the frame showing.
+        if let Some(reference) = app.scene.references.iter_mut().find(|r| r.id == id) {
+            let rate = reference.rate(app.animation.fps, app.settings.animation.match_reference_fps);
+            let (start, _) = reference.span(rate);
+            reference.move_by(app.frame.round() as f64 - start);
+        }
+    }
+    ui.separator();
+    if chrome::item(ui, "Delete Reference", "", true) {
+        references::delete(app, id);
+    }
 }
 
 fn context_menus(app: &mut KayeApp, layout: &Layout2, response: &egui::Response) {
     if response.secondary_clicked() {
         if let Some(pos) = response.interact_pointer_pos() {
             let frame = layout.frame_at(pos.x).round() as FrameNumber;
+            let rows = track_rows(app, &focused_bones(app));
+            let on_reference = match hit_row(app, layout, pos.y, rows.len()).map(|r| rows[r]) {
+                Some(TrackRow::Reference(index)) if app.bottom_tab == BottomTab::Timeline && !layout.ruler.contains(pos) => Some(app.scene.references[index].id),
+                _ => None,
+            };
             app.timeline.menu = if layout.ruler.contains(pos) {
                 MenuTarget::Ruler(frame)
+            } else if let Some(id) = on_reference {
+                MenuTarget::Reference(id)
             } else {
                 let hit = match app.bottom_tab {
                     BottomTab::Timeline => keys_at(app, layout, &focused_bones(app), pos),
@@ -1020,6 +1295,7 @@ fn context_menus(app: &mut KayeApp, layout: &Layout2, response: &egui::Response)
             MenuTarget::Keys => key_menu(app, ui),
             MenuTarget::Empty(frame) => empty_menu(app, ui, frame),
             MenuTarget::Ruler(frame) => ruler_menu(app, ui, frame),
+            MenuTarget::Reference(id) => reference_menu(app, ui, id),
         }
     });
 }

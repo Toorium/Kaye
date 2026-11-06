@@ -113,6 +113,7 @@ fn main() {
         preview: false,
         through: false,
         motion_paths: Vec::new(),
+        references: Vec::new(),
     };
     project::save(Path::new(&out), &scene, &animation, &view).unwrap();
     println!("wrote {out}");

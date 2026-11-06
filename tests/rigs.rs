@@ -5,7 +5,7 @@ use std::path::Path;
 use glam::{Quat, Vec3};
 use kaye::animation::Animation;
 use kaye::camera::OrbitCamera;
-use kaye::gizmo::{AxisLock, MAX_WEIGHT, OpKind, Session, Space, Weights};
+use kaye::gizmo::{AxisLock, MAX_WEIGHT, OpKind, Session, Snap, Space, Weights};
 use kaye::history::{History, PoseChange};
 use kaye::import::{import_bytes, import_file};
 use kaye::math::Xf;
@@ -350,4 +350,44 @@ fn a_full_weight_still_lets_a_bone_move() {
     let (_, heaviest, _) = drag_with(Weights { grab: 5.0, ..Weights::default() }, OpKind::Move, None, false);
     let (full, heaviest) = ((full.pos - before.pos).length(), (heaviest.pos - before.pos).length());
     assert!((heaviest - full * (1.0 - MAX_WEIGHT)).abs() < 1e-3, "{heaviest} against {full}");
+}
+
+/// The same quarter-turn drag as `drag_with`, with snapping.
+fn snapped_drag(snap: Snap, op: OpKind, lock: Option<AxisLock>) -> (Xf, Xf) {
+    let mut s = load("R15Rig.rbxm");
+    let elbow = bone(&s, "RightElbow");
+    let before = s.bones[elbow].frame;
+    let mut camera = OrbitCamera::default();
+    camera.target = before.pos;
+    let center = camera.world_to_screen(before.pos, test_rect()).unwrap();
+    let mut session = Session::new(&s, elbow, op, lock, true, center + egui::vec2(120.0, 0.0));
+    session.snap = snap;
+    session.update(&mut s, &camera, test_rect(), center + egui::vec2(10.0, -137.0));
+    (before, s.bones[elbow].frame)
+}
+
+fn on_step(value: f32, step: f32) -> bool {
+    (value / step - (value / step).round()).abs() < 1e-3
+}
+
+#[test]
+fn snapping_moves_in_whole_steps() {
+    let snap = Snap { step_move: Some(0.5), step_rotate: None };
+    for lock in [None, Some(AxisLock { axis: 0, space: Space::Global })] {
+        let (before, after) = snapped_drag(snap, OpKind::Move, lock);
+        let moved = after.pos - before.pos;
+        assert!(moved.length() > 0.4, "{lock:?}: the drag moved the bone {moved}");
+        assert!(moved.to_array().iter().all(|c| on_step(*c, 0.5)), "{lock:?}: {moved} is off the half-stud steps");
+    }
+}
+
+#[test]
+fn snapping_turns_in_whole_steps() {
+    let snap = Snap { step_move: None, step_rotate: Some(15f32.to_radians()) };
+    let (before, after) = snapped_drag(snap, OpKind::Rotate, None);
+    let degrees = turn(before, after).to_degrees();
+    assert!(degrees > 10.0, "the drag turned the bone {degrees}");
+    assert!((degrees / 15.0 - (degrees / 15.0).round()).abs() < 0.01, "{degrees} isn't a multiple of 15");
+    let (_, free) = snapped_drag(Snap::default(), OpKind::Rotate, None);
+    assert!((turn(before, free).to_degrees() - degrees).abs() > 0.1, "without snapping the turn isn't rounded");
 }

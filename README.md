@@ -5,7 +5,7 @@
   <p>
     <a href="https://github.com/Toorium/Kaye/releases/latest"><img src="https://img.shields.io/github/v/release/Toorium/Kaye?label=release&color=F36B70" alt="Latest release"></a>
     <a href="https://github.com/Toorium/Kaye/releases"><img src="https://img.shields.io/github/downloads/Toorium/Kaye/total?color=F36B70" alt="Downloads"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/Toorium/Kaye" alt="License"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Kaye%20License-lightgrey" alt="License"></a>
     <img src="https://img.shields.io/badge/platform-Windows-0078D6" alt="Windows">
   </p>
   <p>
@@ -53,6 +53,15 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 - IK with poles and bend limits on R6, R15 and custom rigs, plus Look At, Copy Bone, Limit Rotation, Inherit Rotation and Ragdoll
 - Switching a limb between IK and FK, or unparenting it, without it moving
 - Copy, paste and mirror poses
+- Snapping to steps of studs and degrees, like Studio's Move and Rotate increments
+
+**Rigging**
+
+- A Rigging tab: pick a part, Ctrl+click the parts that hang from it, and press Enter to join them with Motor6Ds
+- Move where each joint turns, move parts, and change what a part hangs from
+- Add, move and rename Attachments
+- Deleting a joint leaves its limb where it is
+- Rig exports write the new joints, pivots and attachments into the model
 
 **Animating**
 
@@ -61,6 +70,7 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 - A Graph Editor where you drag keys and handles on every channel
 - Onion skins, motion paths, and any number of animations per rig
 - Cameras you can animate, field of view included, with a corner preview
+- Reference pictures, GIFs and videos in their own windows, playing along with the timeline, which can pop out onto a second screen
 
 **Back to Roblox**
 
@@ -72,6 +82,7 @@ Blender can animate anything, which is why it takes a 300 MB download, a long li
 - `.kaye` project files, and a backup of your work every 5 minutes
 - Studio and Shaded lighting, themes where every color can be changed, and rebindable keys
 - Luau plugins from a Plugins menu
+- Fullscreen with F11
 - Tells you when a new version is out, and updates itself
 
 <table>
@@ -220,6 +231,6 @@ Kaye is built on [egui](https://github.com/emilk/egui) and [wgpu](https://github
 
 ## License
 
-Kaye is released under the BSD 3-Clause License. See [LICENSE](LICENSE).
+Kaye is free to use, copy and change for yourself, but not to share or sell, under the Kaye License. See [LICENSE](LICENSE) for the full terms. Animations and anything else you make with Kaye are yours. Versions 0.1.4 and earlier were released under the BSD 3-Clause License, and stay under it.
 
 Kaye is a fan-made tool and isn't affiliated with or endorsed by Roblox Corporation. Roblox and Roblox Studio are trademarks of Roblox Corporation.

@@ -6,8 +6,11 @@ mod dragout;
 pub mod graph;
 mod home;
 mod icons;
+mod kept;
 mod loading;
 pub mod preferences;
+mod references;
+mod rig_mode;
 mod side;
 pub mod theme;
 pub mod timeline;
@@ -67,6 +70,8 @@ pub enum Selection {
     Folder(FolderId),
     /// A rig's onion skin, from its row in the Workspace.
     Onion(RigId),
+    /// An Attachment in the Rigging tab, by its place in `Scene::attachments`.
+    Attachment(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -391,6 +396,11 @@ pub struct KayeApp {
     pub viewport_rect: Rect,
     /// The bones showing a motion path.
     pub motion_paths: Vec<BoneId>,
+    /// Reference windows and what they show. The references themselves are in the scene.
+    pub references: references::References,
+    /// Animation or Rigging, the tabs in the menu bar.
+    pub mode: rig_mode::Mode,
+    pub rigging: rig_mode::Rigging,
     /// Where those paths run, from the last replay.
     pub motion_path_points: MotionPaths,
     /// `dynamics::signature` of what the last finished replay was given.
@@ -523,6 +533,9 @@ impl KayeApp {
             scroll_to_selection: false,
             viewport_rect: Rect::NOTHING,
             motion_paths: Vec::new(),
+            references: references::References::default(),
+            mode: rig_mode::Mode::default(),
+            rigging: rig_mode::Rigging::default(),
             motion_path_points: MotionPaths::default(),
             replay_signature: None,
             replaying: false,
@@ -754,7 +767,7 @@ impl KayeApp {
             Selection::Bone(b) => self.is_bone_selected(b),
             Selection::Rig(r) => self.selection == selection || self.extra_rigs.contains(&r),
             Selection::Folder(f) => self.selection == selection || self.extra_folders.contains(&f),
-            Selection::Part(_) | Selection::Onion(_) => self.selection == selection,
+            Selection::Part(_) | Selection::Onion(_) | Selection::Attachment(_) => self.selection == selection,
         }
     }
 
@@ -777,7 +790,7 @@ impl KayeApp {
             Selection::Bone(b) => self.extra_bones.insert(b),
             Selection::Rig(r) => self.extra_rigs.insert(r),
             Selection::Folder(f) => self.extra_folders.insert(f),
-            Selection::Part(_) | Selection::Onion(_) | Selection::None => false,
+            Selection::Part(_) | Selection::Onion(_) | Selection::Attachment(_) | Selection::None => false,
         }
     }
 
@@ -786,7 +799,7 @@ impl KayeApp {
             Selection::Bone(b) => self.extra_bones.remove(&b),
             Selection::Rig(r) => self.extra_rigs.remove(&r),
             Selection::Folder(f) => self.extra_folders.remove(&f),
-            Selection::Part(_) | Selection::Onion(_) | Selection::None => false,
+            Selection::Part(_) | Selection::Onion(_) | Selection::Attachment(_) | Selection::None => false,
         }
     }
 
@@ -906,6 +919,7 @@ impl KayeApp {
         match self.selection {
             Selection::Bone(b) => Some(self.scene.bones[b].rig),
             Selection::Part(p) => Some(self.scene.parts[p].rig),
+            Selection::Attachment(a) => Some(self.scene.parts[self.scene.attachments[a].part].rig),
             Selection::Rig(r) | Selection::Onion(r) => Some(r),
             Selection::Folder(f) => {
                 let inside = self.scene.rigs_in_folder(f).into_iter().find(|r| !self.scene.rigs[*r].kind.is_single());
@@ -945,6 +959,18 @@ impl KayeApp {
         self.pause();
         let weights = self.drag_weights(modal);
         self.session = Some(Session::for_rig(&self.scene, rig, op, lock, modal, mouse).with_weights(weights));
+    }
+
+    /// The steps a drag snaps to right now. Holding Ctrl flips snapping, as in Blender.
+    pub fn drag_snap(&self, ctrl: bool) -> crate::gizmo::Snap {
+        let v = &self.settings.viewport;
+        if v.snap == ctrl {
+            return crate::gizmo::Snap::default();
+        }
+        crate::gizmo::Snap {
+            step_move: v.snap_move.then_some(v.move_step),
+            step_rotate: v.snap_rotate.then_some(v.rotate_step.to_radians()),
+        }
     }
 
     /// The weights from Preferences, for G and R. A handle drag keeps the handle under
@@ -1379,7 +1405,7 @@ impl KayeApp {
                 Selection::Rig(r) | Selection::Onion(r) => Some(r),
                 Selection::Bone(b) => Some(scene.bones[b].rig),
                 Selection::Part(p) => Some(scene.parts[p].rig),
-                Selection::Folder(_) | Selection::None => None,
+                Selection::Folder(_) | Selection::Attachment(_) | Selection::None => None,
             };
             if let Some(rig) = rig.filter(|r| onion::can_have(scene, *r) && !rigs.contains(r)) {
                 rigs.push(rig);
@@ -1556,6 +1582,7 @@ impl KayeApp {
             Selection::Rig(r) => scene.rigs[r].removed,
             Selection::Folder(f) => !scene.folder_is_live(f),
             Selection::Onion(r) => scene.rigs[r].removed || scene.rigs[r].onion.is_none(),
+            Selection::Attachment(a) => !crate::rigging::attachment_is_live(scene, a),
             Selection::None => false,
         };
         if gone {
@@ -1788,6 +1815,12 @@ impl KayeApp {
         self.camera_view.preview = !self.camera_view.preview && self.active_camera().is_some();
     }
 
+    /// Borderless, covering the whole screen, the way F11 works in a browser.
+    pub fn toggle_fullscreen(&self, ctx: &egui::Context) {
+        let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+    }
+
     /// Keeps the viewport looking through the camera as it animates.
     fn sync_camera_view(&mut self, rect: Rect) {
         self.camera.through = self.active_camera().filter(|_| self.camera_view.through).map(|camera| {
@@ -1826,7 +1859,14 @@ impl KayeApp {
         });
     }
 
-    pub fn import_paths(&mut self, ctx: &egui::Context, mut paths: Vec<PathBuf>) {
+    pub fn import_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        // Pictures and videos become references instead of being imported.
+        let (pictures, mut paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| references::is_reference_file(p));
+        if !self.home.open {
+            for picture in pictures {
+                references::add(self, &picture);
+            }
+        }
         if paths.is_empty() {
             return;
         }
@@ -2222,6 +2262,7 @@ impl KayeApp {
             preview: self.camera_view.preview,
             through: self.camera_view.through,
             motion_paths: self.motion_paths.clone(),
+            references: self.references.places(),
         }
     }
 
@@ -2284,6 +2325,7 @@ impl KayeApp {
         self.camera_view.preview = view.preview;
         self.camera_view.through = view.through;
         self.motion_paths = view.motion_paths;
+        self.references.restore(&view.references);
         self.sync_animations();
         self.animation.apply(&mut self.scene, self.frame);
         self.saved_work = project::fingerprint(&self.scene, &self.animation);
@@ -2328,6 +2370,7 @@ impl KayeApp {
         self.camera = OrbitCamera::default();
         self.view.show_grid_floor_y = 0.0;
         self.motion_paths.clear();
+        self.references.clear();
         self.motion_path_points = MotionPaths::default();
         self.replay_signature = None;
         self.sync_settings();
@@ -2370,6 +2413,10 @@ impl KayeApp {
                 let half = glam::Vec3::splat(part.size.length() * 0.5);
                 Some((part.world.pos - half, part.world.pos + half))
             }
+            Selection::Attachment(a) => {
+                let at = crate::rigging::attachment_frame(&self.scene, a).pos;
+                Some((at - glam::Vec3::splat(1.0), at + glam::Vec3::splat(1.0)))
+            }
         };
         if let Some((min, max)) = bounds {
             self.camera.frame_bounds(min, max);
@@ -2380,6 +2427,15 @@ impl KayeApp {
         if let Some(session) = self.session.take() {
             let bone = match session.moving {
                 Moving::Bone(bone) => bone,
+                Moving::Part(_) | Moving::Pivot(_) | Moving::Attachment(_) => {
+                    let label = match session.moving {
+                        Moving::Part(_) => "Move part",
+                        Moving::Pivot(_) => "Move pivot",
+                        _ => "Move attachment",
+                    };
+                    self.finish_rig_edit(label);
+                    return;
+                }
                 Moving::Rig(rig) => {
                     // Only an undo step, with nothing for Auto Key to see.
                     let moved = self.scene.rigs[rig].placement;
@@ -2413,6 +2469,7 @@ impl KayeApp {
         if let Some(session) = self.session.take() {
             session.cancel(&mut self.scene);
         }
+        self.drop_rig_edit();
     }
 
     pub fn commit_panel_edit(&mut self) {
@@ -2795,6 +2852,7 @@ impl KayeApp {
         match self.selection {
             Selection::Bone(b) => Some(self.scene.bones[b].head()),
             Selection::Part(p) => Some(self.scene.parts[p].world.pos),
+            Selection::Attachment(a) => Some(crate::rigging::attachment_frame(&self.scene, a).pos),
             Selection::Rig(r) | Selection::Onion(r) => self.scene.bounds(Some(r)).map(|(min, max)| (min + max) * 0.5),
             Selection::Folder(f) => self.folder_bounds(f).map(|(min, max)| (min + max) * 0.5),
             Selection::None => None,
@@ -2934,6 +2992,14 @@ impl KayeApp {
         let mouse = ctx
             .input(|i| i.pointer.latest_pos())
             .unwrap_or(self.viewport_rect.center());
+        if self.mode == rig_mode::Mode::Rigging {
+            if self.rig_moving().is_some() {
+                self.start_rig_item_session(op, None, true, mouse);
+            } else if let Some(rig) = self.movable_rig() {
+                self.start_rig_session(rig, op, None, true, mouse);
+            }
+            return;
+        }
         if let Some(rig) = self.movable_rig() {
             self.start_rig_session(rig, op, None, true, mouse);
         } else if let Some(bone) = self.selected_bone().filter(|b| !modifiers::locked_by_ik(&self.scene, *b)) {
@@ -2977,10 +3043,15 @@ impl KayeApp {
         if self.pressed(ctx, Action::Preferences) {
             self.prefs_open = !self.prefs_open;
         }
+        if self.pressed(ctx, Action::Fullscreen) {
+            self.toggle_fullscreen(ctx);
+        }
         // The rest work on what's in the viewport, which the home page hides.
         if self.home.open {
             return;
         }
+        // Keys, playback and poses belong to the Animation tab.
+        let animating = self.mode == rig_mode::Mode::Animation;
 
         // Before Save, which would otherwise be found inside Ctrl+Shift+S on some layouts.
         if self.pressed(ctx, Action::SaveAs) {
@@ -2998,7 +3069,7 @@ impl KayeApp {
         if self.pressed(ctx, Action::AddCamera) {
             self.add_camera();
         }
-        if self.clipboard_shortcut(ctx, Action::CopyPose) {
+        if animating && self.clipboard_shortcut(ctx, Action::CopyPose) {
             if self.keys_in_focus() {
                 self.copy_keys(ctx);
             } else {
@@ -3008,8 +3079,8 @@ impl KayeApp {
         // Ctrl+Shift+V reaches egui as a paste with Shift held, the same way Ctrl+V does.
         let shift = ctx.input(|i| i.modifiers.shift);
         let mirrored_is_default = self.settings.keys.get(Action::PasteMirrored) == Action::PasteMirrored.default_combo();
-        let paste_mirrored = self.pressed(ctx, Action::PasteMirrored);
-        let paste = self.clipboard_shortcut(ctx, Action::PastePose);
+        let paste_mirrored = animating && self.pressed(ctx, Action::PasteMirrored);
+        let paste = animating && self.clipboard_shortcut(ctx, Action::PastePose);
         if paste_mirrored || (paste && shift && mirrored_is_default) {
             self.paste_mirrored();
         } else if paste {
@@ -3019,7 +3090,7 @@ impl KayeApp {
                 self.paste_pose();
             }
         }
-        if self.pressed(ctx, Action::MirrorPose) {
+        if animating && self.pressed(ctx, Action::MirrorPose) {
             if self.keys_in_focus() {
                 self.mirror_selected_keys();
             } else {
@@ -3031,6 +3102,9 @@ impl KayeApp {
         }
         if self.pressed(ctx, Action::CameraPreview) {
             self.toggle_camera_preview();
+        }
+        if self.pressed(ctx, Action::ToggleSnap) {
+            self.settings.viewport.snap = !self.settings.viewport.snap;
         }
 
         if self.session.is_some() {
@@ -3053,23 +3127,26 @@ impl KayeApp {
             }
             return;
         }
+        if !animating {
+            self.rig_shortcuts(ctx);
+        }
 
-        if self.pressed(ctx, Action::ClearPosition) {
+        if animating && self.pressed(ctx, Action::ClearPosition) {
             self.reset_selected(true, false);
         }
-        if self.pressed(ctx, Action::ClearRotation) {
+        if animating && self.pressed(ctx, Action::ClearRotation) {
             self.reset_selected(false, true);
         }
-        if self.pressed(ctx, Action::DeleteKey) {
+        if animating && self.pressed(ctx, Action::DeleteKey) {
             self.delete_keys_at_frame();
         }
-        if self.pressed(ctx, Action::DuplicateKeys) {
+        if animating && self.pressed(ctx, Action::DuplicateKeys) {
             self.duplicate_selected_keys();
         }
-        if self.pressed(ctx, Action::AddOnionSkin) {
+        if animating && self.pressed(ctx, Action::AddOnionSkin) {
             self.add_onion_skins();
         }
-        if self.pressed(ctx, Action::DeleteOnionSkin) {
+        if animating && self.pressed(ctx, Action::DeleteOnionSkin) {
             self.delete_onion_skins();
         }
         if self.pressed(ctx, Action::Deselect) {
@@ -3089,40 +3166,42 @@ impl KayeApp {
                 self.select(Selection::None);
             }
         }
-        if self.pressed(ctx, Action::PlayPause) {
+        if animating && self.pressed(ctx, Action::PlayPause) {
             self.toggle_play();
         }
-        if self.pressed(ctx, Action::InsertKey) {
+        if animating && self.pressed(ctx, Action::InsertKey) {
             self.insert_key();
         }
-        if self.pressed(ctx, Action::DeleteSelectedKeys) {
+        if animating && self.pressed(ctx, Action::DeleteSelectedKeys) {
             self.delete_selected_keys();
         }
         if self.pressed(ctx, Action::Delete) {
-            if self.keys_in_focus() {
+            if !animating {
+                self.rig_delete();
+            } else if self.keys_in_focus() {
                 self.delete_selected_keys();
             } else if !self.timeline.hovered {
                 self.delete_selection();
             }
         }
-        if self.pressed(ctx, Action::JumpStart) {
+        if animating && self.pressed(ctx, Action::JumpStart) {
             self.pause();
             self.set_frame(self.animation.start as f32);
         }
-        if self.pressed(ctx, Action::JumpEnd) {
+        if animating && self.pressed(ctx, Action::JumpEnd) {
             self.pause();
             self.set_frame(self.animation.end as f32);
         }
-        if self.pressed(ctx, Action::FrameBack) {
+        if animating && self.pressed(ctx, Action::FrameBack) {
             self.step_frame(-1);
         }
-        if self.pressed(ctx, Action::FrameForward) {
+        if animating && self.pressed(ctx, Action::FrameForward) {
             self.step_frame(1);
         }
-        if self.pressed(ctx, Action::NextKey) {
+        if animating && self.pressed(ctx, Action::NextKey) {
             self.jump_key(true);
         }
-        if self.pressed(ctx, Action::PrevKey) {
+        if animating && self.pressed(ctx, Action::PrevKey) {
             self.jump_key(false);
         }
         if self.pressed(ctx, Action::Grab) {
@@ -3285,12 +3364,16 @@ impl eframe::App for KayeApp {
             return;
         }
         self.sync_animations();
+        self.sync_mode();
         self.sync_replay(&ctx);
         self.keep_backup();
         if !self.loader.is_covering() {
             self.handle_shortcuts(&ctx);
         }
         self.tick_playback(&ctx);
+        if !self.home.open {
+            references::update(self, &ctx);
+        }
         self.toasts.retain(|t| t.until > Instant::now());
         if !self.toasts.is_empty() || self.is_importing() || self.is_saving() {
             ctx.request_repaint_after(Duration::from_millis(100));
@@ -3304,7 +3387,10 @@ impl eframe::App for KayeApp {
         } else {
             chrome::shelf(self, ui);
             chrome::status_bar(self, ui);
-            timeline::panel(self, ui);
+            // Rigging works on the rig at rest, with no keys to show.
+            if self.mode == rig_mode::Mode::Animation {
+                timeline::panel(self, ui);
+            }
             if self.timeline.selected != self.keys_seen {
                 self.keys_picked_last = !self.timeline.selected.is_empty();
                 self.keys_seen = self.timeline.selected.clone();
@@ -3313,6 +3399,7 @@ impl eframe::App for KayeApp {
             side::panel(self, ui);
             viewport::panel(self, ui, frame);
             dragout::check(self, &ctx, frame);
+            references::windows(self, &ctx);
         }
         chrome::windows(self, &ctx);
         if !self.loader.is_covering() {

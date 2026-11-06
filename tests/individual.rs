@@ -35,7 +35,7 @@ fn has_look_at(scene: &Scene, bone: BoneId) -> bool {
 }
 
 fn view() -> View {
-    View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() }
+    View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() }
 }
 
 fn temp_file(name: &str) -> std::path::PathBuf {

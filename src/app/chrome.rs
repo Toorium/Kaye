@@ -190,6 +190,7 @@ pub fn menu_bar(app: &mut KayeApp, ui: &mut Ui) {
                     if app.home.open {
                         return;
                     }
+                    super::rig_mode::mode_tabs(app, ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(4.0);
                         let title = app.project_name().unwrap_or_else(|| "Untitled".to_string());
@@ -320,6 +321,10 @@ fn create_menu(app: &mut KayeApp, ui: &mut Ui) {
         ui.separator();
         shape_items(app, ui);
         ui.separator();
+        if item(ui, "Reference...", "", true) {
+            super::references::pick_files(app, ui.ctx());
+        }
+        ui.separator();
         let bone = app.modifier_bone();
         let has_ik = bone.is_some_and(|b| app.has_ik(b));
         let has_unparent = bone.is_some_and(|b| app.has_unparent(b));
@@ -448,6 +453,9 @@ pub fn view_menu(app: &mut KayeApp, ui: &mut Ui) {
         }
         ui.separator();
         ui.checkbox(&mut app.camera.ortho, "Orthographic");
+        if item(ui, "Fullscreen", &app.key_text(Action::Fullscreen), true) {
+            app.toggle_fullscreen(ui.ctx());
+        }
     });
 }
 
@@ -485,17 +493,23 @@ pub fn shelf(app: &mut KayeApp, ui: &mut Ui) {
     Panel::top("shelf").exact_size(SHELF_HEIGHT).frame(bar_frame(theme::header(), 6, 2)).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
-            for tab in ShelfTab::ALL {
-                if shelf_tab(ui, tab.label(), app.settings.interface.shelf_tab == tab).clicked() {
-                    app.settings.interface.shelf_tab = tab;
+            if app.mode == super::rig_mode::Mode::Rigging {
+                shelf_tab(ui, "Rigging", true);
+                shelf_gap(ui);
+                super::rig_mode::tools(app, ui);
+            } else {
+                for tab in ShelfTab::ALL {
+                    if shelf_tab(ui, tab.label(), app.settings.interface.shelf_tab == tab).clicked() {
+                        app.settings.interface.shelf_tab = tab;
+                    }
                 }
-            }
-            shelf_gap(ui);
-            match app.settings.interface.shelf_tab {
-                ShelfTab::Animation => animation_tools(app, ui),
-                ShelfTab::Modifiers => modifier_tools(app, ui),
-                ShelfTab::Objects => object_tools(app, ui),
-                ShelfTab::View => view_tools(app, ui),
+                shelf_gap(ui);
+                match app.settings.interface.shelf_tab {
+                    ShelfTab::Animation => animation_tools(app, ui),
+                    ShelfTab::Modifiers => modifier_tools(app, ui),
+                    ShelfTab::Objects => object_tools(app, ui),
+                    ShelfTab::View => view_tools(app, ui),
+                }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let prefs_tip = app.tip(Action::Preferences);
@@ -651,6 +665,9 @@ fn object_tools(app: &mut KayeApp, ui: &mut Ui) {
         app.add_baseplate();
     }
     shelf_gap(ui);
+    if shelf_button(ui, Icon::Image, theme::text(), true, false, "Reference").clicked() {
+        super::references::pick_files(app, ui.ctx());
+    }
     if shelf_button(ui, Icon::NewFolder, theme::text(), true, false, "New Folder").clicked() {
         let parent = app.selected_folder();
         app.new_folder(parent);
@@ -713,7 +730,7 @@ fn view_tools(app: &mut KayeApp, ui: &mut Ui) {
 }
 
 /// A colored icon. The color says what family it belongs to.
-fn shelf_button(ui: &mut Ui, icon: Icon, tint: Color32, enabled: bool, on: bool, tip: &str) -> egui::Response {
+pub(super) fn shelf_button(ui: &mut Ui, icon: Icon, tint: Color32, enabled: bool, on: bool, tip: &str) -> egui::Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(32.0, SHELF_HEIGHT - 4.0), sense);
     let fill = if on {
@@ -731,7 +748,7 @@ fn shelf_button(ui: &mut Ui, icon: Icon, tint: Color32, enabled: bool, on: bool,
     tooltip(response, tip)
 }
 
-fn shelf_gap(ui: &mut Ui) {
+pub(super) fn shelf_gap(ui: &mut Ui) {
     ui.add_space(3.0);
     divider(ui, SHELF_HEIGHT - 14.0);
     ui.add_space(3.0);
@@ -771,6 +788,10 @@ pub fn status_bar(app: &mut KayeApp, ui: &mut Ui) {
                 Selection::Rig(r) => (Some(Icon::Rig), theme::rig_icon(), s.rigs[r].name.clone()),
                 Selection::Folder(f) => (Some(Icon::Folder), theme::text_dim(), s.folders[f].name.clone()),
                 Selection::Onion(r) => (Some(Icon::Onion), theme::onion_icon(), format!("{}  /  Onion Skin", s.rigs[r].name)),
+                Selection::Attachment(a) => {
+                    let part = &s.parts[s.attachments[a].part];
+                    (Some(Icon::Attachment), theme::bone_icon(), format!("{}  /  {}  /  {}", s.rigs[part.rig].name, part.name, s.attachments[a].name))
+                }
                 Selection::None => (None, theme::text_dim(), String::new()),
             };
             if let Some(icon) = icon {

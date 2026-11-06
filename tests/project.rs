@@ -52,6 +52,7 @@ fn view() -> View {
         preview: false,
         through: false,
         motion_paths: Vec::new(),
+        references: Vec::new(),
     }
 }
 

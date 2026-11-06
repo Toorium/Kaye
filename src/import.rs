@@ -240,6 +240,8 @@ const DECAL_PROPS: &[&str] = &["TextureContent", "Texture"];
 const FRONT_FACE: u32 = 5;
 /// `Enum.MeshType.FileMesh`. Every other type is a shape Roblox draws itself.
 const FILE_MESH: u32 = 5;
+/// Models up to this many parts keep their file, so they can be rigged and exported.
+const RIGGABLE_PARTS: usize = 2000;
 const CHARACTER_MESH_PARTS: [&str; 6] = ["Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"];
 
 /// The shape a SpecialMesh asks for, if it isn't a file. Ramps and prisms have no
@@ -293,6 +295,11 @@ enum JointClass {
 /// `Part1`, `WeldConstraint` does too, and the other constraints join two attachments.
 /// Forces such as `VectorForce` and `LineForce`, and `NoCollisionConstraint`, don't hold
 /// a part anywhere, so they aren't here.
+/// Whether Roblox joins parts with this class, as `joint_class` reads it.
+pub(crate) fn is_joint_class(class: &str) -> bool {
+    joint_class(class).is_some()
+}
+
 fn joint_class(class: &str) -> Option<JointClass> {
     Some(match class {
         "Motor6D" => JointClass::Bone(BoneKind::Motor6D),
@@ -389,6 +396,7 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
             locked: false,
             decals,
             surface_appearance,
+            file_parent: None,
         });
     }
 
@@ -463,9 +471,9 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
     let kind = detect_kind(dom, &refs, &scene);
     let clothing = |class: &str, props: &[&str]| refs.iter().filter_map(|r| dom.get_by_ref(*r)).find(|i| i.class == class).and_then(|i| content_prop(i, props));
     let (shirt, pants) = (clothing("Shirt", &["ShirtTemplateContent", "ShirtTemplate"]), clothing("Pants", &["PantsTemplateContent", "PantsTemplate"]));
-    // Only a rig with joints can have an animation to go with it, and a big static model
-    // shouldn't cost memory for nothing.
-    let model = (!scene.bones.is_empty()).then(|| original_model(dom, &group.roots)).flatten();
+    // A rig with joints can have an animation to go with it, and a model small enough to
+    // rig can be given joints. A big static model shouldn't cost memory for nothing.
+    let model = (!scene.bones.is_empty() || scene.parts.len() <= RIGGABLE_PARTS).then(|| original_model(dom, &group.roots)).flatten();
     scene.rigs.push(Rig {
         name: group.name.clone(),
         kind,
@@ -480,7 +488,10 @@ fn build_rig(dom: &WeakDom, group: &Group, file_name: &str) -> (Scene, Vec<Strin
         model,
         folder: None,
         onion: None,
+        prepared: false,
+        rigged: false,
     });
+    crate::rigging::prepare(&mut scene, 0);
     (scene, warnings)
 }
 

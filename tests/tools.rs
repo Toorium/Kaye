@@ -427,7 +427,7 @@ fn shapes_and_new_modifiers_survive_a_save() {
     a.set_key(neck, 5, turned(0.4));
     a.ensure_clips(&s);
     s.evaluate();
-    let view = View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() };
+    let view = View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() };
     project::save(&path, &s, &a, &view).unwrap();
     let opened = project::load(&path).unwrap();
     assert_eq!(opened.animation, a);

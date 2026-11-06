@@ -91,6 +91,11 @@ icons! {
     Grid => "grid-four",
     Aperture => "aperture",
     PictureInPicture => "picture-in-picture",
+    Snap => "magnet",
+    Image => "image",
+    PopOut => "arrow-square-out",
+    PopIn => "arrow-square-in",
+    Attachment => "push-pin-simple",
 }
 
 thread_local! {

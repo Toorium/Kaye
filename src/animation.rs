@@ -542,12 +542,22 @@ struct KeyData {
     points: [OnceLock<Points>; 2],
     /// The last wrapped copy asked for. A loop's range rarely changes, so one is enough.
     wrapped: Mutex<Option<Arc<Wrapped>>>,
+    /// Different every time the keys change, and shared by copies that haven't. The timeline
+    /// and Graph tab keep their drawing until it moves. 0 is an empty list nobody changed.
+    generation: u64,
+}
+
+/// Hands out `KeyData::generation`s. Only ever goes up, so an old number can't come back.
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_generation() -> u64 {
+    NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Clone for KeyData {
     /// Only runs when the keys are about to change, so the points wouldn't apply.
     fn clone(&self) -> Self {
-        Self { keys: self.keys.clone(), points: Default::default(), wrapped: Default::default() }
+        Self { keys: self.keys.clone(), points: Default::default(), wrapped: Default::default(), generation: next_generation() }
     }
 }
 
@@ -571,7 +581,15 @@ impl DerefMut for Keys {
         let data = Arc::make_mut(&mut self.0);
         data.points = Default::default();
         data.wrapped = Default::default();
+        data.generation = next_generation();
         &mut data.keys
+    }
+}
+
+impl Keys {
+    /// Changes whenever the keys do, so a drawing of them can be kept until then.
+    pub fn generation(&self) -> u64 {
+        self.0.generation
     }
 }
 
@@ -610,7 +628,7 @@ impl<'de> Deserialize<'de> for Keys {
 
 impl From<Vec<Key>> for Keys {
     fn from(keys: Vec<Key>) -> Self {
-        Self(Arc::new(KeyData { keys, ..Default::default() }))
+        Self(Arc::new(KeyData { keys, generation: next_generation(), ..Default::default() }))
     }
 }
 

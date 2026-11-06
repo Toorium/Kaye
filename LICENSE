@@ -1,28 +1,70 @@
-BSD 3-Clause License
+Kaye License 1.0
 
-Copyright (c) 2026, Toorium
+Copyright (c) 2026 Toorium. All rights reserved, except for the permissions
+given below.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+1. Using Kaye
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+   You may download Kaye from its official page, https://github.com/Toorium/Kaye,
+   and use it for free, for any purpose, including paid work.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+2. What you make is yours
 
-3. Neither the name of the copyright holder nor the names of its
-   contributors may be used to endorse or promote products derived from
-   this software without specific prior written permission.
+   Animations, rigs, projects and any other files you make with Kaye belong to
+   you. This license puts no limits on them.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+3. Copying and changing
+
+   You may copy Kaye and its source code onto your own devices, change the
+   source code, and build your own versions, as long as you only use them
+   yourself.
+
+4. No distributing
+
+   You may not share, sell, rent, upload, host or otherwise give anyone else a
+   copy of Kaye, its source code, or a changed version of either, whether for
+   free or for money. Two things are allowed:
+
+   a. Linking to the official page above.
+   b. Forking the repository on GitHub, as GitHub's terms allow, to send changes
+      back through pull requests. A fork must keep this license, and must not
+      publish builds or releases.
+
+5. Sending changes back
+
+   If you send a change to Kaye, for example through a pull request, you give
+   Toorium permission to use, change and release it as part of Kaye, under this
+   license or any other.
+
+6. Keep this notice
+
+   Any copy you are allowed to make must include this license and the copyright
+   line above.
+
+7. Other people's parts
+
+   Kaye includes parts made by others, such as the Phosphor icons and Rust
+   libraries. Those parts keep their own licenses, which come first for them.
+
+8. No warranty
+
+   Kaye is provided "as is", without warranty of any kind, express or implied,
+   including warranties of merchantability, fitness for a particular purpose
+   and noninfringement. In no event shall Toorium or anyone who contributed to
+   Kaye be liable for any claim, damages or other liability, whether in
+   contract, tort or otherwise, arising from, out of or in connection with Kaye
+   or its use.
+
+9. Ending
+
+   If you break this license, your permission to use, copy and change Kaye
+   ends.
+
+10. Older versions
+
+   Kaye 0.1.4 and earlier were released under the BSD 3-Clause License. Copies
+   of those versions stay under that license. This license covers every
+   version after them.
+
+Kaye is a fan-made tool and isn't affiliated with or endorsed by Roblox
+Corporation. Roblox and Roblox Studio are trademarks of Roblox Corporation.

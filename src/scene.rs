@@ -99,6 +99,10 @@ pub struct Part {
     /// A plain texture on a body part has the clothes drawn over it.
     #[serde(default)]
     pub surface_appearance: bool,
+    /// What held it in the file, noted when its rig was first readied for rigging, so an
+    /// export knows which of the file's joints a rigging change replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_parent: Option<PartId>,
 }
 
 /// A side of a part, as Roblox's `Enum.NormalId` numbers them.
@@ -316,6 +320,10 @@ pub struct Bone {
     /// The part this bone carries around, for a spawned shape.
     #[serde(default)]
     pub part: Option<PartId>,
+    /// The joint instance it came from, as its place among everything in the rig's model in
+    /// order. None for a joint made in Kaye. See `rigging.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<usize>,
 }
 
 impl Bone {
@@ -338,6 +346,7 @@ impl Bone {
             removed: false,
             rebased: false,
             part: None,
+            source: None,
         }
     }
 
@@ -424,6 +433,13 @@ pub struct Rig {
     /// See-through copies of the rig on the frames around the one showing, see `onion.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onion: Option<OnionSkin>,
+    /// Its attachments and joints have been matched up with the model. See `rigging::prepare`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub prepared: bool,
+    /// Changed in the Rigging tab, so a Rig export writes its joints, pivots, attachments and
+    /// part positions into the model.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rigged: bool,
 }
 
 /// A folder in the Workspace, for keeping rigs, cameras and shapes in order.
@@ -482,6 +498,14 @@ pub struct RigState {
     folders: Vec<Folder>,
     rig_folders: Vec<Option<FolderId>>,
     onions: Vec<Option<OnionSkin>>,
+    /// What rigging changes: what holds each part and where it sits in the file,
+    drives: Vec<(Drive, Xf, Option<PartId>)>,
+    /// each bone's place in the tree, name and drawn length,
+    bone_tree: Vec<(Option<BoneId>, Vec<BoneId>, String, Vec3, bool)>,
+    part_order: Vec<PartId>,
+    /// each rig's lists and kind,
+    rig_lists: Vec<(Vec<PartId>, Vec<BoneId>, RigKind, bool, bool)>,
+    attachments: Vec<Attachment>,
 }
 
 /// The order to place some of a scene in. Parents always come before children.
@@ -506,9 +530,44 @@ pub struct Scene {
     /// The Workspace's folders. Rigs say which one they're in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<Folder>,
+    /// Pictures and videos playing along in their own windows, see `reference.rs`. They
+    /// aren't part of undo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<crate::reference::Reference>,
+    /// Roblox Attachments on parts, from the file or added in the Rigging tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+    /// Every pose held at rest and modifiers left out, as the Rigging tab shows a rig.
+    #[serde(skip)]
+    pub at_rest: AtRest,
     /// What React and Ragdoll came to on every frame, see `dynamics.rs`.
     #[serde(skip)]
     pub dynamics: Dynamics,
+}
+
+/// Whether a scene shows at rest. A copy never does, so a copy made to export, play or replay
+/// the animation can't come out unposed because the Rigging tab was open.
+#[derive(Debug, Default)]
+pub struct AtRest(pub bool);
+
+impl Clone for AtRest {
+    fn clone(&self) -> Self {
+        AtRest(false)
+    }
+}
+
+/// A Roblox Attachment: a named spot on a part, which accessories and constraints use.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub name: String,
+    pub part: PartId,
+    /// Its CFrame, relative to its part, as Roblox stores it.
+    pub local: Xf,
+    #[serde(default)]
+    pub removed: bool,
+    /// Where it is in the rig's model, as for `Bone::source`. None for one made in Kaye.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<usize>,
 }
 
 impl Scene {
@@ -519,9 +578,16 @@ impl Scene {
 
     /// Recomputes every world transform from the current poses, then runs modifiers.
     pub fn evaluate(&mut self) {
+        // At rest every joint takes no pose, while cameras, shapes and controls stay where
+        // their poses put them, since those poses are where they stand.
+        let at_rest = self.at_rest.0;
         for bone in &mut self.bones {
-            bone.solved = bone.pose;
+            bone.solved = if at_rest && !matches!(bone.link, BoneLink::Free { .. }) { Xf::IDENTITY } else { bone.pose };
             bone.rebased = false;
+        }
+        if at_rest {
+            self.place_all();
+            return;
         }
         for modifier in &self.modifiers {
             if matches!(modifier.kind, ModifierKind::Unparent(_) | ModifierKind::Inherit(_)) {
@@ -715,6 +781,8 @@ impl Scene {
             model: None,
             folder: None,
             onion: None,
+            prepared: false,
+            rigged: false,
         });
         let id = self.add_control(name, BoneKind::Camera, rig, Xf::IDENTITY, fov);
         self.bones[id].pose = at;
@@ -744,6 +812,8 @@ impl Scene {
             model: None,
             folder: None,
             onion: None,
+            prepared: false,
+            rigged: false,
         });
         let id = self.add_control(name.clone(), BoneKind::Shape, rig, Xf::IDENTITY, 1.0);
         self.bones[id].pose = at;
@@ -768,6 +838,7 @@ impl Scene {
             locked: false,
             decals: Vec::new(),
             surface_appearance: false,
+            file_parent: None,
         });
         id
     }
@@ -848,6 +919,11 @@ impl Scene {
             folders: self.folders.clone(),
             rig_folders: self.rigs.iter().map(|r| r.folder).collect(),
             onions: self.rigs.iter().map(|r| r.onion).collect(),
+            drives: self.parts.iter().map(|p| (p.drive, p.file_cframe, p.file_parent)).collect(),
+            bone_tree: self.bones.iter().map(|b| (b.parent, b.children.clone(), b.name.clone(), b.tail_local, b.link_to_parent_tail)).collect(),
+            part_order: self.part_order.clone(),
+            rig_lists: self.rigs.iter().map(|r| (r.parts.clone(), r.bones.clone(), r.kind, r.prepared, r.rigged)).collect(),
+            attachments: self.attachments.clone(),
         }
     }
 
@@ -883,6 +959,21 @@ impl Scene {
             rig.folder = state.rig_folders.get(id).copied().flatten();
             rig.onion = state.onions.get(id).copied().flatten();
         }
+        for (part, (drive, file_cframe, file_parent)) in self.parts.iter_mut().zip(&state.drives) {
+            (part.drive, part.file_cframe, part.file_parent) = (*drive, *file_cframe, *file_parent);
+        }
+        for (bone, (parent, children, name, tail, to_tail)) in self.bones.iter_mut().zip(&state.bone_tree) {
+            (bone.parent, bone.children, bone.name, bone.tail_local, bone.link_to_parent_tail) = (*parent, children.clone(), name.clone(), *tail, *to_tail);
+        }
+        for (rig, (parts, bones, kind, prepared, rigged)) in self.rigs.iter_mut().zip(&state.rig_lists) {
+            (rig.parts, rig.bones, rig.kind, rig.prepared, rig.rigged) = (parts.clone(), bones.clone(), *kind, *prepared, *rigged);
+        }
+        // Parts brought in since keep their place after the rest, each still after its holder.
+        let mut order = state.part_order.clone();
+        let known: std::collections::HashSet<PartId> = order.iter().copied().collect();
+        order.extend(self.part_order.iter().copied().filter(|p| !known.contains(p)));
+        self.part_order = order;
+        self.attachments = state.attachments.clone();
     }
 
     /// Whether a part has gone, on its own or with the bone or rig that carries it.
@@ -993,6 +1084,13 @@ impl Scene {
         for f in &mut other.folders {
             f.parent = f.parent.map(|x| x + fo);
         }
+        for p in &mut other.parts {
+            p.file_parent = p.file_parent.map(|x| x + po);
+        }
+        for a in &mut other.attachments {
+            a.part += po;
+        }
+        self.attachments.append(&mut other.attachments);
         self.folders.append(&mut other.folders);
         self.parts.append(&mut other.parts);
         self.bones.append(&mut other.bones);

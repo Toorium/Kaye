@@ -8,7 +8,7 @@ use glam::{Quat, Vec3};
 
 use crate::camera::{OrbitCamera, Ray};
 use crate::math::{Xf, closest_on_line};
-use crate::scene::{BoneId, RigId, Scene};
+use crate::scene::{BoneId, PartId, RigId, Scene};
 
 /// The handle colors, which the theme sets: X, Y and Z, then a handle under the mouse,
 /// then the handles that move or turn freely.
@@ -70,6 +70,23 @@ pub struct Weights {
 /// Past this, a bone would barely move at all.
 pub const MAX_WEIGHT: f32 = 0.95;
 
+/// Steps a drag goes in, like Studio's Move and Rotate increments. Each is measured from
+/// where the drag began, so a bone off the grid keeps its own offset.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Snap {
+    /// Studs.
+    pub step_move: Option<f32>,
+    /// Radians.
+    pub step_rotate: Option<f32>,
+}
+
+fn snap_to(value: f32, step: Option<f32>) -> f32 {
+    match step.filter(|s| *s > 1e-6) {
+        Some(step) => (value / step).round() * step,
+        None => value,
+    }
+}
+
 /// How much of the mouse's travel a weight lets through.
 fn follow(weight: f32) -> f32 {
     if weight.is_finite() { 1.0 - weight.clamp(0.0, MAX_WEIGHT) } else { 1.0 }
@@ -93,6 +110,52 @@ pub struct AxisLock {
 pub enum Moving {
     Bone(BoneId),
     Rig(RigId),
+    /// In the Rigging tab: a part at rest, with what hangs from it.
+    Part(PartId),
+    /// In the Rigging tab: where a joint turns, which moves no part.
+    Pivot(BoneId),
+    /// In the Rigging tab: an Attachment, by its place in `Scene::attachments`.
+    Attachment(usize),
+}
+
+impl Moving {
+    fn is_rigging(self) -> bool {
+        matches!(self, Moving::Part(_) | Moving::Pivot(_) | Moving::Attachment(_))
+    }
+
+    /// Where it is now, in the world.
+    pub fn frame(self, scene: &Scene) -> Xf {
+        match self {
+            Moving::Bone(bone) => scene.bones[bone].frame,
+            Moving::Rig(rig) => scene.rig_frame(rig),
+            Moving::Part(part) => scene.parts[part].world,
+            Moving::Pivot(bone) => crate::rigging::pivot(scene, bone).unwrap_or(scene.bones[bone].frame),
+            Moving::Attachment(index) => crate::rigging::attachment_frame(scene, index),
+        }
+    }
+
+    /// Puts a rigging item at a place in the world.
+    fn place(self, scene: &mut Scene, frame: Xf) {
+        match self {
+            Moving::Part(part) => crate::rigging::set_part(scene, part, frame),
+            Moving::Pivot(bone) => crate::rigging::set_pivot(scene, bone, frame),
+            Moving::Attachment(index) => crate::rigging::set_attachment_frame(scene, index, frame),
+            Moving::Bone(_) | Moving::Rig(_) => {}
+        }
+    }
+}
+
+/// Puts several rigging items where they go, parts in the order they hang, so each one's
+/// holder is already in place when it's set.
+fn place_all(scene: &mut Scene, mut items: Vec<(Moving, Xf)>) {
+    let rank = |m: &Moving, scene: &Scene| match m {
+        Moving::Part(part) => scene.part_order.iter().position(|p| p == part).unwrap_or(0),
+        _ => usize::MAX,
+    };
+    items.sort_by_key(|(m, _)| rank(m, scene));
+    for (moving, frame) in items {
+        moving.place(scene, frame);
+    }
 }
 
 /// One drag from start to confirm or cancel.
@@ -122,6 +185,13 @@ pub struct Session {
     /// Slows the drag down behind the mouse. Only G and R set these, so a handle
     /// stays under the mouse.
     pub weights: Weights,
+    /// Set every frame, since holding Ctrl flips it mid-drag.
+    pub snap: Snap,
+    /// `angle` after snapping, which is the turn really made.
+    turned: f32,
+    /// Other parts, pivots or attachments moving along in the Rigging tab, and where each
+    /// started.
+    pub rig_extras: Vec<(Moving, Xf)>,
 }
 
 impl Session {
@@ -153,6 +223,9 @@ impl Session {
             origin: frame,
             extras: Vec::new(),
             weights: Weights::default(),
+            snap: Snap::default(),
+            turned: 0.0,
+            rig_extras: Vec::new(),
         }
     }
 
@@ -200,6 +273,7 @@ impl Session {
                 let start = camera.screen_ray(self.start_mouse, rect);
                 let now = camera.screen_ray(mouse, rect);
                 let follow = follow(self.weights.grab);
+                let step = self.snap.step_move;
                 self.offset = match self.lock {
                     Some(lock) => {
                         let dir = self.axis_dir(lock);
@@ -207,14 +281,18 @@ impl Session {
                             closest_on_line(pivot, dir, start.origin, start.dir),
                             closest_on_line(pivot, dir, now.origin, now.dir),
                         ) {
-                            (Some(a), Some(b)) => dir * ((b - a) * follow).clamp(-5000.0, 5000.0),
+                            (Some(a), Some(b)) => dir * snap_to(((b - a) * follow).clamp(-5000.0, 5000.0), step),
                             _ => self.offset,
                         }
                     }
                     None => {
                         let n = camera.to_camera();
                         match (ray_plane(start, pivot, n), ray_plane(now, pivot, n)) {
-                            (Some(a), Some(b)) => (b - a) * follow,
+                            // Each world axis in whole steps, the way Studio's grid works.
+                            (Some(a), Some(b)) => {
+                                let d = (b - a) * follow;
+                                Vec3::new(snap_to(d.x, step), snap_to(d.y, step), snap_to(d.z, step))
+                            }
                             _ => self.offset,
                         }
                     }
@@ -247,6 +325,7 @@ impl Session {
                 self.last_angle = screen_angle;
                 // Kept as the turn the bone makes, so the readout shows what it did.
                 self.angle += step * follow(self.weights.rotate);
+                self.turned = snap_to(self.angle, self.snap.step_rotate);
                 let to_camera = camera.to_camera();
                 // Counter-clockwise on screen is positive around an axis aimed at the viewer.
                 let (axis, sign) = match self.lock {
@@ -257,23 +336,29 @@ impl Session {
                     None => (to_camera, 1.0),
                 };
                 Xf::new(
-                    (Quat::from_axis_angle(axis, self.angle * sign) * self.start_frame.rot).normalize(),
+                    (Quat::from_axis_angle(axis, self.turned * sign) * self.start_frame.rot).normalize(),
                     pivot,
                 )
             }
         };
         self.last_mouse = mouse;
         self.current = frame;
+        // Each extra turns the same way around its own middle, and moves as far.
+        let turn = frame.rot * self.origin.rot.inverse();
+        let shift = frame.pos - self.origin.pos;
         let bone = match self.moving {
             Moving::Bone(bone) => bone,
             Moving::Rig(rig) => {
                 scene.set_rig_placement(rig, frame * self.origin.inverse() * self.start_pose);
                 return;
             }
+            moving => {
+                let mut items = vec![(moving, frame)];
+                items.extend(self.rig_extras.iter().map(|(m, start)| (*m, Xf::new((turn * start.rot).normalize(), start.pos + shift))));
+                place_all(scene, items);
+                return;
+            }
         };
-        // Each extra bone turns the same way around its own joint, and moves as far.
-        let turn = frame.rot * self.origin.rot.inverse();
-        let shift = frame.pos - self.origin.pos;
         for (bone, _, start) in &self.extras {
             let target = Xf::new((turn * start.rot).normalize(), start.pos + shift);
             scene.bones[*bone].pose = scene.bones[*bone].base.inverse() * target;
@@ -287,6 +372,7 @@ impl Session {
         self.start_mouse = self.last_mouse;
         self.last_angle = f32::NAN;
         self.angle = 0.0;
+        self.turned = 0.0;
     }
 
     /// R during a rotate switches between view rotation and free rotation.
@@ -324,7 +410,21 @@ impl Session {
         match self.moving {
             Moving::Bone(bone) => scene.set_bone_pose(bone, self.start_pose),
             Moving::Rig(rig) => scene.set_rig_placement(rig, self.start_pose),
+            moving => {
+                let mut items = vec![(moving, self.start_pose)];
+                items.extend(self.rig_extras.iter().copied());
+                place_all(scene, items);
+            }
         }
+    }
+
+    /// A drag in the Rigging tab of a part, pivot or attachment, carrying other selected
+    /// ones along.
+    pub fn for_rigging(scene: &Scene, moving: Moving, others: &[Moving], op: OpKind, lock: Option<AxisLock>, modal: bool, mouse: Pos2) -> Self {
+        let frame = moving.frame(scene);
+        let mut session = Self::starting(moving, frame, frame, op, lock, modal, mouse);
+        session.rig_extras = others.iter().filter(|m| **m != moving && m.is_rigging()).map(|m| (*m, m.frame(scene))).collect();
+        session
     }
 
     /// Short text for the viewport while dragging.
@@ -340,7 +440,7 @@ impl Session {
         match self.op {
             OpKind::Move => format!("Move {:.3} studs{axis}", self.offset.length()),
             OpKind::Rotate if self.trackball => "Free Rotate".to_string(),
-            OpKind::Rotate => format!("Rotate {:.1}\u{b0}{axis}", self.angle.to_degrees()),
+            OpKind::Rotate => format!("Rotate {:.1}\u{b0}{axis}", self.turned.to_degrees()),
         }
     }
 }

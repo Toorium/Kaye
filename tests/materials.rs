@@ -175,7 +175,7 @@ fn materials_decals_and_locks_survive_a_save() {
     let bone = decorated_block(&mut scene);
     let part = scene.bones[bone].part.unwrap();
     let path = std::env::temp_dir().join(format!("kaye-materials-{}.kaye", std::process::id()));
-    let view = View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new() };
+    let view = View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: Vec::new(), references: Vec::new() };
     project::save(&path, &scene, &Animation::default(), &view).unwrap();
     let opened = project::load(&path).unwrap();
     std::fs::remove_file(&path).ok();

@@ -38,6 +38,9 @@ pub struct View {
     /// The bones showing a motion path.
     #[serde(default)]
     pub motion_paths: Vec<BoneId>,
+    /// Where each reference's window was left.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<crate::reference::WindowPlace>,
 }
 
 #[derive(Serialize)]

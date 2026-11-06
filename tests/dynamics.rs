@@ -363,7 +363,7 @@ fn a_replay_only_runs_again_when_the_work_changes() {
 fn a_ragdoll_survives_a_save() {
     let (mut s, a, arm) = raised_arm();
     modifiers::add_ragdoll(&mut s, arm);
-    let view = kaye::project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: vec![arm] };
+    let view = kaye::project::View { frame: 0.0, target: Vec3::ZERO, yaw: 0.0, pitch: 0.0, dist: 10.0, ortho: false, floor_y: 0.0, camera: None, preview: false, through: false, motion_paths: vec![arm], references: Vec::new() };
     let path = std::env::temp_dir().join(format!("kaye-dynamics-{}.kaye", std::process::id()));
     kaye::project::save(&path, &s, &a, &view).unwrap();
     let opened = kaye::project::load(&path).unwrap();

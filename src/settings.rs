@@ -165,6 +165,14 @@ pub struct ViewportSettings {
     pub joint_size: f32,
     pub gizmo_size: f32,
     pub field_of_view: f32,
+    /// Snapping, like Studio's Move and Rotate increments. Moves and turns go in steps of
+    /// `move_step` studs and `rotate_step` degrees from where they started. Holding Ctrl
+    /// during a drag flips it, as in Blender.
+    pub snap: bool,
+    pub snap_move: bool,
+    pub snap_rotate: bool,
+    pub move_step: f32,
+    pub rotate_step: f32,
 }
 
 impl Default for ViewportSettings {
@@ -187,6 +195,11 @@ impl Default for ViewportSettings {
             joint_size: 3.6,
             gizmo_size: 1.0,
             field_of_view: 34.0,
+            snap: false,
+            snap_move: true,
+            snap_rotate: true,
+            move_step: 1.0,
+            rotate_step: 15.0,
         }
     }
 }
@@ -251,6 +264,9 @@ pub struct AnimationSettings {
     /// Each animation keeps its own frame rate and modifiers. Like smoothing, it's really
     /// the open project's, in `Animation::separate`, and this follows it.
     pub individual_properties: bool,
+    /// Reference videos play at their real speed whatever the frame rate. Off, each of
+    /// their frames takes one timeline frame, so they play slower or faster.
+    pub match_reference_fps: bool,
 }
 
 impl Default for AnimationSettings {
@@ -275,6 +291,7 @@ impl Default for AnimationSettings {
             rotate_weight: 0.0,
             free_rotate_weight: 0.0,
             individual_properties: false,
+            match_reference_fps: true,
         }
     }
 }
@@ -671,6 +688,10 @@ actions! {
     ViewBottom: "View", "Bottom View", "Ctrl+7", false;
     CameraView: "View", "Camera View", "0", false;
     CameraPreview: "View", "Camera Preview", "Ctrl+0", false;
+    Fullscreen: "View", "Fullscreen", "F11", false;
+    ToggleSnap: "View", "Snapping", "Shift+Tab", false;
+    JoinParts: "Rigging", "Join Parts", "Enter", false;
+    AddAttachment: "Rigging", "Add Attachment", "Shift+T", false;
 }
 
 /// Only stores what someone changed. Everything else follows the defaults.
