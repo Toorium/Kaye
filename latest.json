@@ -1,12 +1,12 @@
 {
-    "version":  "0.1.3",
-    "notes":  "New Posing Weight in Preferences \u003e Animation. Grab (G), Rotate (R) and Free Rotate (R R) can each move a bone less than the mouse does, from 0% (exactly with it) to 95%. At 50% it goes half as far.",
+    "version":  "0.1.4",
+    "notes":  "New shelf tabs: Animation, Modifiers, Objects and View, each with that kind of tool. New Individual Animation Properties in Preferences \u003e Animation: when it\u0027s on, each animation keeps its own frame rate and modifiers, and switching animations brings them back.",
     "files":  [
                   {
                       "path":  "kaye.exe",
-                      "size":  42185728,
-                      "sha256":  "762d780ca44cf8e7ae46122e56d5acbf3187f88d6332208f1682909fb531b626",
-                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.3/kaye.exe"
+                      "size":  42332672,
+                      "sha256":  "90adc53b0c0d63ab3d503f2f0c838b307430cf2c8c6eb4377297916a4421b7f1",
+                      "url":  "https://github.com/Toorium/Kaye/releases/download/v0.1.4/kaye.exe"
                   }
               ]
 }
