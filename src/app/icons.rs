@@ -60,7 +60,6 @@ icons! {
     Unparent => "link-break",
     Target => "target",
     Close => "x",
-    Save => "floppy-disk",
     Pan => "hand",
     Copy => "copy",
     Limit => "sliders-horizontal",
@@ -71,6 +70,27 @@ icons! {
     File => "file",
     // Kaye's own, drawn to match: a figure with two fading copies behind it.
     Onion => "onion",
+    // The shelf's tabs.
+    Eraser => "eraser",
+    ClearPosition => "arrows-in-cardinal",
+    ClearRotation => "arrow-arc-left",
+    Mirror => "flip-horizontal",
+    MotionPath => "path",
+    Bake => "fire",
+    Sphere => "sphere",
+    Cylinder => "cylinder",
+    // Kaye's own, drawn to match, since Phosphor has no wedge or baseplate.
+    Wedge => "wedge",
+    CornerWedge => "corner-wedge",
+    Baseplate => "baseplate",
+    NewFolder => "folder-simple-plus",
+    Trash => "trash",
+    ZoomIn => "magnifying-glass-plus",
+    Views => "perspective",
+    Sun => "sun",
+    Grid => "grid-four",
+    Aperture => "aperture",
+    PictureInPicture => "picture-in-picture",
 }
 
 thread_local! {

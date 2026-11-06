@@ -9,8 +9,9 @@ use super::theme;
 use super::{KayeApp, Leave, Selection, Tool};
 use crate::camera::ViewPreset;
 use crate::export::{self, Pack};
-use crate::scene::{BoneKind, PartShape, RigKind};
-use crate::settings::{Action, Shading};
+use crate::modifiers;
+use crate::scene::{BoneId, BoneKind, PartShape, RigKind};
+use crate::settings::{Action, Shading, ShelfTab};
 
 /// The strip along the top of an editor, holding its tabs or menus.
 pub const STRIP_HEIGHT: f32 = 24.0;
@@ -476,76 +477,239 @@ pub fn show_menu(app: &mut KayeApp, ui: &mut Ui) {
     });
 }
 
-/// One row of icons for the commands people reach for most, named by their tooltips.
-/// Keys and playback aren't here because they live with the timeline.
+/// Tabs of icons, one for each kind of work, as Maya's shelf has, named by their
+/// tooltips. Undo, Redo and Preferences stay on the right whichever tab is open. Copy
+/// and paste aren't here, since everyone uses their keys, saving and opening are in the
+/// File menu, and playback lives with the timeline.
 pub fn shelf(app: &mut KayeApp, ui: &mut Ui) {
     Panel::top("shelf").exact_size(SHELF_HEIGHT).frame(bar_frame(theme::header(), 6, 2)).show(ui, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 1.0;
-            let (import_tip, save_tip) = (app.tip(Action::Import), app.tip(Action::Save));
-            if shelf_button(ui, Icon::Import, theme::modifier_icon(), true, false, &import_tip).clicked() {
-                app.open_import_dialog(ui.ctx());
-            }
-            if shelf_button(ui, Icon::Save, theme::modifier_icon(), true, false, &save_tip).clicked() {
-                app.save_project(ui.ctx());
-            }
-            shelf_gap(ui);
-            let (undo_tip, redo_tip) = (app.tip(Action::Undo), app.tip(Action::Redo));
-            if shelf_button(ui, Icon::Undo, theme::text(), app.history.can_undo(), false, &undo_tip).clicked() {
-                app.undo();
-            }
-            if shelf_button(ui, Icon::Redo, theme::text(), app.history.can_redo(), false, &redo_tip).clicked() {
-                app.redo();
-            }
-            shelf_gap(ui);
-            if shelf_button(ui, Icon::Reset, theme::rig_icon(), app.selected_bone().is_some(), false, "Clear Pose").clicked() {
-                app.reset_selected(true, true);
-            }
-            shelf_gap(ui);
-            let bone = app.modifier_bone();
-            let has_ik = bone.is_some_and(|b| app.has_ik(b));
-            let has_unparent = bone.is_some_and(|b| app.has_unparent(b));
-            let ik_on = bone.is_some_and(|b| app.ik_is_on(b));
-            let unparent_on = bone.is_some_and(|b| app.unparent_is_on(b));
-            // Once a bone has one of these, the button switches it, leaving the limb put.
-            let ik_tip = if !has_ik { "Inverse Kinematics" } else if ik_on { "Switch to FK" } else { "Switch to IK" };
-            if shelf_button(ui, Icon::Chain, theme::bone_icon(), bone.is_some(), ik_on, ik_tip).clicked() {
-                if let Some(bone) = bone {
-                    if has_ik {
-                        app.switch_ik(bone, !ik_on);
-                    } else {
-                        app.add_ik(bone);
-                    }
-                }
-            }
-            let unparent_tip = if has_unparent && unparent_on { "Parent" } else { "Unparent" };
-            if shelf_button(ui, Icon::Unparent, theme::bone_icon(), bone.is_some(), unparent_on, unparent_tip).clicked() {
-                if let Some(bone) = bone {
-                    if has_unparent {
-                        app.switch_unparent(bone, !unparent_on);
-                    } else {
-                        app.add_unparent(bone);
-                    }
+            for tab in ShelfTab::ALL {
+                if shelf_tab(ui, tab.label(), app.settings.interface.shelf_tab == tab).clicked() {
+                    app.settings.interface.shelf_tab = tab;
                 }
             }
             shelf_gap(ui);
-            let camera_tip = app.tip(Action::AddCamera);
-            if shelf_button(ui, Icon::Camera, theme::camera_icon(), true, false, &camera_tip).clicked() {
-                app.add_camera();
+            match app.settings.interface.shelf_tab {
+                ShelfTab::Animation => animation_tools(app, ui),
+                ShelfTab::Modifiers => modifier_tools(app, ui),
+                ShelfTab::Objects => object_tools(app, ui),
+                ShelfTab::View => view_tools(app, ui),
             }
-            let shapes = shelf_button(ui, Icon::Part, theme::part_icon(), true, false, "Add Shape");
-            egui::Popup::menu(&shapes).show(|ui| {
-                menu_rows(ui);
-                shape_items(app, ui);
-            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let prefs_tip = app.tip(Action::Preferences);
                 if shelf_button(ui, Icon::Settings, theme::text(), true, app.prefs_open, &prefs_tip).clicked() {
                     app.prefs_open = !app.prefs_open;
                 }
+                shelf_gap(ui);
+                let (undo_tip, redo_tip) = (app.tip(Action::Undo), app.tip(Action::Redo));
+                if shelf_button(ui, Icon::Redo, theme::text(), app.history.can_redo(), false, &redo_tip).clicked() {
+                    app.redo();
+                }
+                if shelf_button(ui, Icon::Undo, theme::text(), app.history.can_undo(), false, &undo_tip).clicked() {
+                    app.undo();
+                }
             });
         });
     });
+}
+
+/// A flat text tab on the shelf. The open one is a lighter block.
+fn shelf_tab(ui: &mut Ui, label: &str, active: bool) -> egui::Response {
+    let font = FontId::proportional(12.0);
+    let width = ui.painter().layout_no_wrap(label.to_string(), font.clone(), theme::text()).size().x;
+    let (rect, response) = ui.allocate_exact_size(vec2(width + 16.0, 22.0), Sense::click());
+    if active {
+        ui.painter().rect_filled(rect, theme::RADIUS, theme::section());
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, theme::RADIUS, theme::panel());
+    }
+    let color = if active || response.hovered() { theme::ink() } else { theme::text_dim() };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
+    ui.painter().galley(rect.center() - galley.size() * 0.5, galley, color);
+    response
+}
+
+/// Keys, clearing and mirroring poses, and seeing motion over time.
+fn animation_tools(app: &mut KayeApp, ui: &mut Ui) {
+    let tint = theme::rig_icon();
+    let can_key = !app.key_targets().is_empty();
+    if shelf_button(ui, Icon::Key, tint, can_key, false, &app.tip(Action::InsertKey)).clicked() {
+        app.insert_key();
+    }
+    if shelf_button(ui, Icon::Eraser, tint, can_key, false, &app.tip(Action::DeleteKey)).clicked() {
+        app.delete_keys_at_frame();
+    }
+    shelf_gap(ui);
+    let posable = app.selected_bone().is_some() || app.movable_rig().is_some();
+    if shelf_button(ui, Icon::Reset, tint, posable, false, "Clear Pose").clicked() {
+        app.reset_selected(true, true);
+    }
+    if shelf_button(ui, Icon::ClearPosition, tint, posable, false, &app.tip(Action::ClearPosition)).clicked() {
+        app.reset_selected(true, false);
+    }
+    if shelf_button(ui, Icon::ClearRotation, tint, posable, false, &app.tip(Action::ClearRotation)).clicked() {
+        app.reset_selected(false, true);
+    }
+    if shelf_button(ui, Icon::Mirror, tint, can_key, false, &app.tip(Action::MirrorPose)).clicked() {
+        app.mirror_pose();
+    }
+    shelf_gap(ui);
+    // Each of these adds the first time and takes it away the next, lit while it's there.
+    let (can_add, can_delete) = (app.can_add_onion(), app.can_delete_onion());
+    let onion_tip = if can_add { app.tip(Action::AddOnionSkin) } else { app.tip(Action::DeleteOnionSkin) };
+    if shelf_button(ui, Icon::Onion, theme::onion_icon(), can_add || can_delete, !can_add && can_delete, &onion_tip).clicked() {
+        if can_add {
+            app.add_onion_skins();
+        } else {
+            app.delete_onion_skins();
+        }
+    }
+    let bones = app.selected_bones();
+    let all_have_path = !bones.is_empty() && bones.iter().all(|b| app.motion_paths.contains(b));
+    let path_tip = if all_have_path { "Clear Motion Path" } else { "Create Motion Path" };
+    if shelf_button(ui, Icon::MotionPath, tint, app.selected_bone().is_some(), all_have_path, path_tip).clicked() {
+        if all_have_path {
+            app.clear_motion_paths();
+        } else {
+            app.create_motion_paths();
+        }
+    }
+}
+
+/// Every modifier, for the selected bone, then baking them all into keys.
+fn modifier_tools(app: &mut KayeApp, ui: &mut Ui) {
+    let tint = theme::bone_icon();
+    let bone = app.modifier_bone();
+    let has_ik = bone.is_some_and(|b| app.has_ik(b));
+    let has_unparent = bone.is_some_and(|b| app.has_unparent(b));
+    let ik_on = bone.is_some_and(|b| app.ik_is_on(b));
+    let unparent_on = bone.is_some_and(|b| app.unparent_is_on(b));
+    // Once a bone has one of these, the button switches it, leaving the limb put.
+    let ik_tip = if !has_ik { "Inverse Kinematics" } else if ik_on { "Switch to FK" } else { "Switch to IK" };
+    if shelf_button(ui, Icon::Chain, tint, bone.is_some(), ik_on, ik_tip).clicked() {
+        if let Some(bone) = bone {
+            if has_ik {
+                app.switch_ik(bone, !ik_on);
+            } else {
+                app.add_ik(bone);
+            }
+        }
+    }
+    let unparent_tip = if has_unparent && unparent_on { "Parent" } else { "Unparent" };
+    if shelf_button(ui, Icon::Unparent, tint, bone.is_some(), unparent_on, unparent_tip).clicked() {
+        if let Some(bone) = bone {
+            if has_unparent {
+                app.switch_unparent(bone, !unparent_on);
+            } else {
+                app.add_unparent(bone);
+            }
+        }
+    }
+    // The rest can only be added once, as in the Add Modifier menu.
+    let add: [(Icon, &str, u8, fn(&mut KayeApp, BoneId)); 5] = [
+        (Icon::Target, "Look At", 2, KayeApp::add_look_at),
+        (Icon::Copy, "Copy Bone", 3, KayeApp::add_copy),
+        (Icon::Limit, "Limit Rotation", 4, KayeApp::add_limit),
+        (Icon::Rotate, "Inherit Rotation", 5, KayeApp::add_inherit),
+        (Icon::Ragdoll, "Ragdoll", modifiers::RAGDOLL_KIND, KayeApp::add_ragdoll),
+    ];
+    for (icon, tip, kind, add) in add {
+        let free = bone.filter(|b| !app.has_modifier(*b, kind));
+        if shelf_button(ui, icon, tint, free.is_some(), false, tip).clicked() {
+            if let Some(bone) = free {
+                add(app, bone);
+            }
+        }
+    }
+    shelf_gap(ui);
+    if shelf_button(ui, Icon::Bake, tint, !app.scene.modifiers.is_empty(), false, "Bake Animation").clicked() {
+        app.bake_all_modifiers();
+    }
+}
+
+/// Cameras, shapes and folders to add, and deleting what's selected.
+fn object_tools(app: &mut KayeApp, ui: &mut Ui) {
+    if shelf_button(ui, Icon::Camera, theme::camera_icon(), true, false, &app.tip(Action::AddCamera)).clicked() {
+        app.add_camera();
+    }
+    shelf_gap(ui);
+    for shape in PartShape::ALL {
+        let icon = match shape {
+            PartShape::Block => Icon::Part,
+            PartShape::Ball => Icon::Sphere,
+            PartShape::Cylinder => Icon::Cylinder,
+            PartShape::Wedge => Icon::Wedge,
+            PartShape::CornerWedge => Icon::CornerWedge,
+        };
+        if shelf_button(ui, icon, theme::part_icon(), true, false, shape.label()).clicked() {
+            app.add_shape(shape);
+        }
+    }
+    if shelf_button(ui, Icon::Baseplate, theme::part_icon(), true, false, "Baseplate").clicked() {
+        app.add_baseplate();
+    }
+    shelf_gap(ui);
+    if shelf_button(ui, Icon::NewFolder, theme::text(), true, false, "New Folder").clicked() {
+        let parent = app.selected_folder();
+        app.new_folder(parent);
+    }
+    if shelf_button(ui, Icon::Trash, theme::text(), app.selection != Selection::None, false, &app.tip(Action::Delete)).clicked() {
+        app.delete_selection();
+    }
+}
+
+/// Framing, views, what's drawn, and looking through a camera.
+fn view_tools(app: &mut KayeApp, ui: &mut Ui) {
+    let tint = theme::text();
+    if shelf_button(ui, Icon::Frame, tint, true, false, &app.tip(Action::FrameAll)).clicked() {
+        app.frame_all();
+    }
+    if shelf_button(ui, Icon::ZoomIn, tint, app.selection != Selection::None, false, &app.tip(Action::FrameSelected)).clicked() {
+        app.frame_selection();
+    }
+    let views = shelf_button(ui, Icon::Views, tint, true, false, "Views");
+    egui::Popup::menu(&views).show(|ui| {
+        menu_rows(ui);
+        for (preset, action) in [
+            (ViewPreset::Front, Action::ViewFront),
+            (ViewPreset::Back, Action::ViewBack),
+            (ViewPreset::Right, Action::ViewRight),
+            (ViewPreset::Left, Action::ViewLeft),
+            (ViewPreset::Top, Action::ViewTop),
+            (ViewPreset::Bottom, Action::ViewBottom),
+        ] {
+            if item(ui, preset.label(), &app.key_text(action), true) {
+                app.camera_view.through = false;
+                app.camera.set_preset(preset);
+            }
+        }
+        ui.separator();
+        ui.checkbox(&mut app.camera.ortho, "Orthographic");
+    });
+    shelf_gap(ui);
+    let shaded = app.settings.viewport.shading == Shading::Shaded;
+    if shelf_button(ui, Icon::Sun, tint, true, shaded, "Shaded").clicked() {
+        app.settings.viewport.shading = if shaded { Shading::Studio } else { Shading::Shaded };
+    }
+    if shelf_button(ui, Icon::Rig, tint, true, app.view.show_parts, "Show Parts").clicked() {
+        app.view.show_parts = !app.view.show_parts;
+    }
+    if shelf_button(ui, Icon::Bone, tint, true, app.view.show_bones, "Show Bones").clicked() {
+        app.view.show_bones = !app.view.show_bones;
+    }
+    if shelf_button(ui, Icon::Grid, tint, true, app.settings.viewport.show_grid, "Show Grid").clicked() {
+        app.settings.viewport.show_grid = !app.settings.viewport.show_grid;
+    }
+    shelf_gap(ui);
+    let has_camera = app.active_camera().is_some();
+    if shelf_button(ui, Icon::Aperture, theme::camera_icon(), has_camera, app.camera_view.through, &app.tip(Action::CameraView)).clicked() {
+        app.toggle_camera_view();
+    }
+    if shelf_button(ui, Icon::PictureInPicture, theme::camera_icon(), has_camera, app.camera_view.preview, &app.tip(Action::CameraPreview)).clicked() {
+        app.toggle_camera_preview();
+    }
 }
 
 /// A colored icon. The color says what family it belongs to.

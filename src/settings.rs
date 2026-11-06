@@ -71,6 +71,8 @@ pub struct InterfaceSettings {
     pub ui_scale: f32,
     pub tooltips: bool,
     pub show_fps: bool,
+    /// The shelf's tab, kept from one run to the next.
+    pub shelf_tab: ShelfTab,
 }
 
 impl Default for InterfaceSettings {
@@ -79,6 +81,31 @@ impl Default for InterfaceSettings {
             ui_scale: 1.0,
             tooltips: true,
             show_fps: false,
+            shelf_tab: ShelfTab::Animation,
+        }
+    }
+}
+
+/// The shelf's tabs, each a row of tools for one kind of work, as Maya's shelf has.
+/// Saving and opening stay in the File menu, which the owner preferred to a tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShelfTab {
+    #[default]
+    Animation,
+    Modifiers,
+    Objects,
+    View,
+}
+
+impl ShelfTab {
+    pub const ALL: [ShelfTab; 4] = [ShelfTab::Animation, ShelfTab::Modifiers, ShelfTab::Objects, ShelfTab::View];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShelfTab::Animation => "Animation",
+            ShelfTab::Modifiers => "Modifiers",
+            ShelfTab::Objects => "Objects",
+            ShelfTab::View => "View",
         }
     }
 }
