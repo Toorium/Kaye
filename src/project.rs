@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::animation::{Animation, Easing};
 use crate::math::Xf;
-use crate::modifiers::ModifierKind;
+use crate::modifiers::{Modifier, ModifierKind};
 use crate::scene::{BoneId, BoneLink, BuiltShape, Drive, MeshFit, Scene};
 
 pub const EXTENSION: &str = "kaye";
@@ -229,6 +229,10 @@ pub fn fingerprint(scene: &Scene, animation: &Animation) -> u64 {
     if animation.shown.is_some() {
         animation.store_range();
         (animation.start, animation.end, animation.looping, animation.shown) = (0, 0, false, None);
+        // With its own frame rate, the showing one's is on its animation now.
+        if animation.separate {
+            animation.fps = 0.0;
+        }
     }
     let mut writer = HashWriter(DefaultHasher::new());
     serde_json::to_writer(&mut writer, &(&scene, &animation)).expect("a scene can always be written");
@@ -311,22 +315,35 @@ fn check(project: &Project) -> Result<(), String> {
     }
     scene.part_order.iter().try_for_each(|p| part(*p))?;
     scene.skinned_order.iter().chain(&scene.free_order).try_for_each(|b| bone(*b))?;
-    for m in &scene.modifiers {
+    let modifier = |m: &Modifier| -> Result<(), String> {
         bone(m.bone)?;
         match m.kind {
             ModifierKind::Ik(ik) => {
                 bone(ik.target)?;
-                ik.pole.map_or(Ok(()), bone)?;
+                ik.pole.map_or(Ok(()), bone)
             }
-            ModifierKind::Unparent(u) => u.anchor.map_or(Ok(()), bone)?,
-            ModifierKind::LookAt(look) => bone(look.target)?,
-            ModifierKind::Copy(copy) => copy.source.map_or(Ok(()), bone)?,
-            ModifierKind::Ragdoll(ragdoll) => ragdoll.objects.iter().flatten().try_for_each(|r| rig(*r))?,
-            ModifierKind::Limit(_) | ModifierKind::Inherit(_) => {}
+            ModifierKind::Unparent(u) => u.anchor.map_or(Ok(()), bone),
+            ModifierKind::LookAt(look) => bone(look.target),
+            ModifierKind::Copy(copy) => copy.source.map_or(Ok(()), bone),
+            ModifierKind::Ragdoll(ragdoll) => ragdoll.objects.iter().flatten().try_for_each(|r| rig(*r)),
+            ModifierKind::Limit(_) | ModifierKind::Inherit(_) => Ok(()),
         }
-    }
+    };
+    scene.modifiers.iter().try_for_each(modifier)?;
     for (index, clip) in animation.clips.iter().enumerate() {
         rig(clip.rig)?;
+        if clip.fps.is_some_and(|fps| !(fps > 0.0 && fps.is_finite())) {
+            return Err(format!("animation {index}'s frame rate isn't a usable number"));
+        }
+        if let Some(setup) = &clip.setup {
+            setup.modifiers.iter().try_for_each(modifier)?;
+            for (id, link) in &setup.controls {
+                bone(*id)?;
+                if let BoneLink::Free { follow, .. } = link {
+                    follow.map_or(Ok(()), bone)?;
+                }
+            }
+        }
         let playing = animation.clips.iter().filter(|c| c.rig == clip.rig && c.active).count();
         if playing != 1 {
             return Err(format!("rig {} has {playing} animations playing", clip.rig));

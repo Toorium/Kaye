@@ -13,6 +13,7 @@ use glam::{EulerRot, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::math::Xf;
+use crate::modifiers::{self, Setup};
 use crate::scene::{BoneId, RigId, Scene};
 
 pub type FrameNumber = i32;
@@ -1037,6 +1038,14 @@ pub struct Clip {
     /// Empty while active.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tracks: BTreeMap<BoneId, Track>,
+    /// Its own frame rate, with `Animation::separate` on. Like the range, it's in
+    /// `Animation::fps` while this is the one showing. `None` takes whatever is showing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
+    /// Its own modifiers, with `Animation::separate` on. `None` while active, since they're
+    /// on the scene then, and for one that takes on whatever its rig has when it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<Setup>,
 }
 
 /// Only read from older project files, which `Animation::flatten_layers` brings into one
@@ -1088,6 +1097,11 @@ pub struct Animation {
     /// The shown animation's curves wrap round its loop, see `Wrap`.
     #[serde(default)]
     pub smooth_loop: bool,
+    /// Individual Animation Properties: each animation keeps its own frame rate and
+    /// modifiers, in `Clip::fps` and `Clip::setup`, instead of sharing them. Saved with the
+    /// project, and Preferences follows it, as with smoothing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub separate: bool,
     pub smoothing: Smoothing,
     /// What a brand new key starts with.
     pub default_easing: Easing,
@@ -1106,6 +1120,7 @@ impl Default for Animation {
             fps: 30.0,
             looping: true,
             smooth_loop: false,
+            separate: false,
             smoothing: Smoothing::None,
             default_easing: Easing::default(),
         }
@@ -1206,7 +1221,8 @@ impl Animation {
     pub fn ensure_clips(&mut self, scene: &Scene) {
         for (rig, details) in scene.rigs.iter().enumerate() {
             if !details.removed && !self.clips.iter().any(|c| c.rig == rig) {
-                self.clips.push(Clip { name: DEFAULT_CLIP_NAME.to_string(), rig, start: self.start, end: self.end, looping: self.looping, smooth_loop: self.smooth_loop, active: true, tracks: BTreeMap::new() });
+                let clip = Clip { name: DEFAULT_CLIP_NAME.to_string(), rig, active: true, ..self.like_shown(rig) };
+                self.clips.push(clip);
             }
         }
     }
@@ -1220,17 +1236,39 @@ impl Animation {
         self.clips.iter().position(|c| c.rig == rig && c.active)
     }
 
+    /// A new animation with no keys, taking the range showing, and the frame rate too with
+    /// `separate` on, so it starts out like the one being worked on.
+    fn like_shown(&self, rig: RigId) -> Clip {
+        Clip {
+            name: String::new(),
+            rig,
+            start: self.start,
+            end: self.end,
+            looping: self.looping,
+            smooth_loop: self.smooth_loop,
+            active: false,
+            tracks: BTreeMap::new(),
+            fps: self.separate.then_some(self.fps),
+            setup: None,
+        }
+    }
+
     /// Puts what's being edited back on the animation it belongs to.
     pub fn store_range(&mut self) {
+        let fps = self.separate.then_some(self.fps);
         if let Some(clip) = self.shown.and_then(|i| self.clips.get_mut(i)) {
             clip.start = self.start;
             clip.end = self.end;
             clip.looping = self.looping;
             clip.smooth_loop = self.smooth_loop;
+            if fps.is_some() {
+                clip.fps = fps;
+            }
         }
     }
 
-    /// Makes this animation's range the one being shown and edited.
+    /// Makes this animation's range the one being shown and edited, and its frame rate
+    /// with `separate` on.
     pub fn show_clip(&mut self, index: usize) {
         if self.shown == Some(index) {
             return;
@@ -1238,11 +1276,54 @@ impl Animation {
         self.store_range();
         let clip = &self.clips[index];
         (self.start, self.end, self.looping, self.smooth_loop) = (clip.start, clip.end, clip.looping, clip.smooth_loop);
+        if let Some(fps) = clip.fps.filter(|_| self.separate) {
+            self.fps = fps;
+        }
         self.shown = Some(index);
     }
 
-    /// Makes this the animation its rig plays. Keys are moved, not copied, so everything
-    /// that edits `tracks` is working on this animation from now on.
+    /// Makes this the animation its rig plays, with its own modifiers when `separate` is
+    /// on. The ones there now are kept on the animation that was playing.
+    pub fn switch_clip(&mut self, scene: &mut Scene, index: usize) {
+        let rig = self.clips[index].rig;
+        let old = self.active_clip(rig);
+        if old == Some(index) {
+            return;
+        }
+        self.set_active_clip(scene, index);
+        if !self.separate {
+            return;
+        }
+        if let Some(old) = old {
+            self.clips[old].setup = Some(modifiers::setup_of(scene, rig));
+        }
+        if let Some(setup) = self.clips[index].setup.take() {
+            modifiers::use_setup(scene, rig, &setup);
+        }
+    }
+
+    /// Turns Individual Animation Properties on or off. Turning it on starts every
+    /// animation with the frame rate and modifiers there now. Turning it off has every
+    /// animation share the ones showing, and the others' own are let go.
+    pub fn set_separate(&mut self, scene: &Scene, on: bool) {
+        if self.separate == on {
+            return;
+        }
+        self.store_range();
+        self.separate = on;
+        for clip in &mut self.clips {
+            // A camera or shape never shows its own range, so it plays at what's showing.
+            let single = scene.rigs.get(clip.rig).is_none_or(|r| r.kind.is_single());
+            clip.fps = (on && !single).then_some(self.fps);
+            // Built from the scene as it is, so there's nothing stale to bring back later.
+            clip.setup = (on && !clip.active).then(|| modifiers::setup_of(scene, clip.rig));
+        }
+    }
+
+    /// Makes this the animation its rig plays, moving keys only. Everything outside tests
+    /// goes through `switch_clip`, which brings the animation's own modifiers too.
+    /// Keys are moved, not copied, so everything that edits `tracks` is working on this
+    /// animation from now on.
     pub fn set_active_clip(&mut self, scene: &Scene, index: usize) {
         let rig = self.clips[index].rig;
         if let Some(old) = self.active_clip(rig) {
@@ -1278,10 +1359,13 @@ impl Animation {
         (2..).map(|n| format!("{stem} {n}")).find(|name| !taken(name)).expect("there's always another number")
     }
 
-    /// Adds an empty animation, with the range showing. Returns where it went.
+    /// Adds an empty animation, with the range showing. With `separate` on it takes the
+    /// frame rate showing too, and the modifiers its rig has when it starts playing.
+    /// Returns where it went.
     pub fn add_clip(&mut self, rig: RigId) -> usize {
         let name = self.unused_clip_name(rig, DEFAULT_CLIP_NAME, None);
-        self.clips.push(Clip { name, rig, start: self.start, end: self.end, looping: self.looping, smooth_loop: self.smooth_loop, active: false, tracks: BTreeMap::new() });
+        let clip = Clip { name, ..self.like_shown(rig) };
+        self.clips.push(clip);
         self.clips.len() - 1
     }
 
@@ -1290,7 +1374,8 @@ impl Animation {
     pub fn add_keyed_clip(&mut self, rig: RigId, name: &str, end: FrameNumber, looping: bool, tracks: BTreeMap<BoneId, Track>) -> usize {
         let name = self.unused_clip_name(rig, name, None);
         let active = self.active_clip(rig).is_none();
-        let mut clip = Clip { name, rig, start: 0, end, looping, smooth_loop: false, active, tracks: BTreeMap::new() };
+        // Its keys were placed at the frame rate showing, so that's its own.
+        let mut clip = Clip { name, start: 0, end, looping, smooth_loop: false, active, ..self.like_shown(rig) };
         if active {
             self.tracks.extend(tracks);
         } else {
@@ -1322,8 +1407,9 @@ impl Animation {
     }
 
     /// Takes an animation and its keys away. A rig always keeps one, and if this was the
-    /// one playing, the next one takes over. Returns false when it's the rig's last.
-    pub fn remove_clip(&mut self, scene: &Scene, index: usize) -> bool {
+    /// one playing, the next one takes over, with its own modifiers. Returns false when
+    /// it's the rig's last.
+    pub fn remove_clip(&mut self, scene: &mut Scene, index: usize) -> bool {
         let rig = self.clips[index].rig;
         let siblings = self.clips_of(rig);
         if siblings.len() < 2 {
@@ -1331,7 +1417,7 @@ impl Animation {
         }
         if self.clips[index].active {
             let next = siblings.iter().copied().find(|i| *i > index).or(siblings.iter().copied().rfind(|i| *i < index)).expect("there are at least two");
-            self.set_active_clip(scene, next);
+            self.switch_clip(scene, next);
             if self.shown == Some(index) {
                 self.show_clip(next);
             }
@@ -1346,12 +1432,17 @@ impl Animation {
     }
 
     /// A copy with this animation the one playing and showing, for looking at it without
-    /// switching to it.
-    pub fn playing_clip(&self, scene: &Scene, index: usize) -> Animation {
+    /// switching to it. `world` is a copy of the scene, which takes the animation's own
+    /// modifiers with `separate` on.
+    pub fn playing_clip(&self, world: &mut Scene, index: usize) -> Animation {
         let mut playing = self.clone();
         playing.store_range();
-        playing.set_active_clip(scene, index);
+        playing.switch_clip(world, index);
         playing.show_clip(index);
+        // A camera or shape goes along with what's showing, as it does in Kaye.
+        if world.rigs[self.clips[index].rig].kind.is_single() {
+            playing.fps = self.fps;
+        }
         playing
     }
 
@@ -1545,12 +1636,29 @@ impl Animation {
         track.curves_looped(self.smoothing, self.wrap_of(scene.bones[bone].rig))
     }
 
-    /// Takes a bone out of every animation.
+    /// Takes a bone out of every animation, along with any of their own modifiers that
+    /// needed it.
     pub fn forget_bone(&mut self, bone: BoneId) {
         self.tracks.remove(&bone);
         self.clips.iter_mut().for_each(|c| {
             c.tracks.remove(&bone);
+            if let Some(setup) = &mut c.setup {
+                for control in setup.forget(bone) {
+                    c.tracks.remove(&control);
+                }
+            }
         });
+    }
+
+    /// Takes a deleted bone out of the animations. With `separate` on, a target or pole
+    /// only goes from the animation playing, since the others keep modifiers of their own.
+    pub fn forget_gone(&mut self, scene: &Scene, bone: BoneId) {
+        let b = &scene.bones[bone];
+        if self.separate && b.kind.is_control() && !scene.rigs[b.rig].removed {
+            self.tracks.remove(&bone);
+        } else {
+            self.forget_bone(bone);
+        }
     }
 
     /// A copy with these keys shifted in time. A moved key replaces any key already

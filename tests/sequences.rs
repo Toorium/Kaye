@@ -242,7 +242,7 @@ fn what_kaye_exports_comes_back_the_same() {
     assert!(read_back.clips[0].looping);
     assert_eq!((read_back.clips[1].end, read_back.clips[1].looping), (20, false));
 
-    let wanted = animation.playing_clip(&scene, 0);
+    let wanted = animation.playing_clip(&mut scene.clone(), 0);
     for frame in [0, 7, 20, 33, 40] {
         let (made, came_back) = (wanted.sample(arm, frame as f32).unwrap(), read_back.sample(moving(&loaded, 0, "RightUpperArm"), frame as f32).unwrap());
         assert!(made.pos.distance(came_back.pos) < 1e-3, "frame {frame}");

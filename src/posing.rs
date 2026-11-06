@@ -255,7 +255,7 @@ pub fn bake(scene: &mut Scene, animation: &mut Animation, indices: &[usize]) {
     order.sort_unstable();
     for index in order.into_iter().rev() {
         for gone in modifiers::remove(scene, index) {
-            animation.forget_bone(gone);
+            animation.forget_gone(scene, gone);
         }
     }
     for (bone, _) in &baked {

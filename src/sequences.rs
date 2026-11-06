@@ -286,7 +286,7 @@ pub fn load(animation: &mut Animation, scene: &mut Scene, found: Vec<Found>, fir
         let clip = animation.add_keyed_clip(rig, name, placed.end, sequence.looping, placed.tracks);
         if rig < first_new_rig && switched.insert(rig) {
             let old = animation.active_clip(rig);
-            animation.set_active_clip(scene, clip);
+            animation.switch_clip(scene, clip);
             animation.rest_unkeyed(scene, rig);
             if let Some(old) = old.filter(|old| animation.clips_of(rig).len() == 2 && animation.clips[*old].tracks.is_empty()) {
                 animation.remove_clip(scene, old);

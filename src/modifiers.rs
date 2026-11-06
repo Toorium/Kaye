@@ -564,6 +564,116 @@ pub fn remove_pole(scene: &mut Scene, index: usize) -> Option<BoneId> {
     Some(pole)
 }
 
+/// One animation's own modifiers, kept while another of its rig's animations plays. Only
+/// used with Individual Animation Properties on, see `Animation::separate`. The targets and
+/// poles stay in the scene the whole time, hidden while an animation without them plays,
+/// so their ids and keys still match.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Setup {
+    pub modifiers: Vec<Modifier>,
+    /// The targets and poles these use, with what each one follows.
+    pub controls: Vec<(BoneId, BoneLink)>,
+}
+
+impl Setup {
+    /// Lets go of a deleted bone. Modifiers that can't work without it go, and so do
+    /// their targets, which are returned so their keys can go too.
+    pub fn forget(&mut self, bone: BoneId) -> Vec<BoneId> {
+        self.modifiers.retain(|m| m.bone != bone && !needed_controls(m).contains(&bone));
+        for m in &mut self.modifiers {
+            let_go_of(m, |b| b != bone);
+        }
+        let used: Vec<BoneId> = self.modifiers.iter().flat_map(controls_of).collect();
+        let gone = self.controls.iter().map(|(b, _)| *b).filter(|b| !used.contains(b)).collect();
+        self.controls.retain(|(b, _)| used.contains(b));
+        gone
+    }
+}
+
+/// The controls a modifier can't work without.
+fn needed_controls(modifier: &Modifier) -> Vec<BoneId> {
+    match modifier.kind {
+        ModifierKind::Ik(ik) => vec![ik.target],
+        ModifierKind::LookAt(look) => vec![look.target],
+        _ => Vec::new(),
+    }
+}
+
+/// Every control a modifier uses, its pole included.
+fn controls_of(modifier: &Modifier) -> Vec<BoneId> {
+    let mut controls = needed_controls(modifier);
+    if let ModifierKind::Ik(Ik { pole: Some(pole), .. }) = modifier.kind {
+        controls.push(pole);
+    }
+    controls
+}
+
+/// Drops whatever a modifier only points at, such as a pole or a bone to copy, when
+/// `kept` says it's gone.
+fn let_go_of(modifier: &mut Modifier, kept: impl Fn(BoneId) -> bool) {
+    match &mut modifier.kind {
+        ModifierKind::Ik(ik) => ik.pole = ik.pole.filter(|p| kept(*p)),
+        ModifierKind::Copy(copy) => copy.source = copy.source.filter(|s| kept(*s)),
+        ModifierKind::Unparent(unparent) => unparent.anchor = unparent.anchor.filter(|a| kept(*a)),
+        _ => {}
+    }
+}
+
+/// The modifiers on this rig's bones right now, and the targets and poles they use.
+pub fn setup_of(scene: &Scene, rig: RigId) -> Setup {
+    let modifiers = scene.modifiers.iter().filter(|m| scene.bones[m.bone].rig == rig).copied().collect();
+    let controls = scene.rigs[rig]
+        .bones
+        .iter()
+        .map(|b| (*b, &scene.bones[*b]))
+        .filter(|(_, b)| b.kind.is_control() && !b.removed)
+        .map(|(id, b)| (id, b.link))
+        .collect();
+    Setup { modifiers, controls }
+}
+
+/// Puts an animation's own modifiers on its rig in place of the ones there now. Anything
+/// they point at that's been deleted since is let go, so an old setup can't bring back a
+/// bone that's gone.
+pub fn use_setup(scene: &mut Scene, rig: RigId, setup: &Setup) {
+    for id in scene.rigs[rig].bones.clone() {
+        if scene.bones[id].kind.is_control() {
+            scene.bones[id].removed = true;
+        }
+    }
+    for (id, link) in &setup.controls {
+        if let Some(bone) = scene.bones.get_mut(*id).filter(|b| b.rig == rig && b.kind.is_control()) {
+            bone.removed = false;
+            bone.link = *link;
+        }
+    }
+    let bones = &scene.bones;
+    scene.modifiers.retain(|m| bones[m.bone].rig != rig);
+    let live = |b: BoneId| scene.bones.get(b).is_some_and(|b| !b.removed);
+    let mut kept = Vec::with_capacity(setup.modifiers.len());
+    for modifier in &setup.modifiers {
+        if !live(modifier.bone) || scene.bones[modifier.bone].rig != rig || !needed_controls(modifier).into_iter().all(live) {
+            continue;
+        }
+        let mut modifier = *modifier;
+        let_go_of(&mut modifier, live);
+        if let ModifierKind::Ragdoll(ragdoll) = &mut modifier.kind {
+            let landing: Vec<RigId> = ragdoll.objects.iter().flatten().copied().filter(|r| scene.rigs.get(*r).is_some_and(|r| !r.removed)).collect();
+            ragdoll.objects = std::array::from_fn(|i| landing.get(i).copied());
+        }
+        kept.push(modifier);
+    }
+    let used: Vec<BoneId> = kept.iter().flat_map(controls_of).collect();
+    for (id, _) in &setup.controls {
+        if !used.contains(id) {
+            if let Some(bone) = scene.bones.get_mut(*id).filter(|b| b.rig == rig) {
+                bone.removed = true;
+            }
+        }
+    }
+    scene.modifiers.extend(kept);
+}
+
 fn bones_below(scene: &Scene, bone: BoneId, into: &mut Vec<BoneId>) {
     into.push(bone);
     for child in &scene.bones[bone].children {

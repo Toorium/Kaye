@@ -1516,7 +1516,7 @@ fn ik_properties(app: &mut KayeApp, ui: &mut Ui, index: usize, bone: BoneId, ik:
                 if used {
                     modifiers::add_pole(scene, index);
                 } else if let Some(pole) = modifiers::remove_pole(scene, index) {
-                    animation.forget_bone(pole);
+                    animation.forget_gone(scene, pole);
                 }
             });
         }

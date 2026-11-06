@@ -221,6 +221,9 @@ pub struct AnimationSettings {
     pub grab_weight: f32,
     pub rotate_weight: f32,
     pub free_rotate_weight: f32,
+    /// Each animation keeps its own frame rate and modifiers. Like smoothing, it's really
+    /// the open project's, in `Animation::separate`, and this follows it.
+    pub individual_properties: bool,
 }
 
 impl Default for AnimationSettings {
@@ -244,6 +247,7 @@ impl Default for AnimationSettings {
             grab_weight: 0.0,
             rotate_weight: 0.0,
             free_rotate_weight: 0.0,
+            individual_properties: false,
         }
     }
 }

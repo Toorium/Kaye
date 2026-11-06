@@ -427,6 +427,8 @@ fn animation(app: &mut KayeApp, ui: &mut Ui) {
     heading(ui, "Playback");
     slider(ui, "Speed", &mut s.playback_speed, 0.1..=2.0, "x");
     toggle(ui, "Play Every Frame", &mut s.play_every_frame);
+    heading(ui, "Animations");
+    toggle(ui, "Individual Animation Properties", &mut s.individual_properties);
     heading(ui, "New Animations");
     slider(ui, "Frame Rate", &mut s.default_fps, 12.0..=120.0, "");
     row(ui, "End Frame", |ui| {

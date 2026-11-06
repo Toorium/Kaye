@@ -1101,8 +1101,9 @@ impl KayeApp {
             export::Pack::Rig => export::write_model(&path, &self.scene, &self.animation, rig),
             export::Pack::Keyframe => export::write_all_animations(&path, &self.scene, &self.animation, rig),
             export::Pack::CurrentKeyframe => {
-                let current = self.animation.active_clip(rig).map_or_else(|| self.animation.clone(), |clip| self.animation.playing_clip(&self.scene, clip));
-                export::write_animation(&path, &self.scene, &current, rig)
+                let mut world = self.scene.clone();
+                let current = self.animation.active_clip(rig).map_or_else(|| self.animation.clone(), |clip| self.animation.playing_clip(&mut world, clip));
+                export::write_animation(&path, &world, &current, rig)
             }
         };
         if let Err(message) = written {
@@ -1456,7 +1457,7 @@ impl KayeApp {
     /// doesn't key goes back to rest, so the last one's pose doesn't show through.
     pub fn switch_animation(&mut self, clip: usize) {
         self.change_animations("Switch animation", |scene, animation| {
-            animation.set_active_clip(scene, clip);
+            animation.switch_clip(scene, clip);
             let rig = animation.clips[clip].rig;
             animation.rest_unkeyed(scene, rig);
         });
@@ -1465,7 +1466,7 @@ impl KayeApp {
     pub fn new_animation(&mut self, rig: RigId) {
         self.change_animations("New animation", |scene, animation| {
             let clip = animation.add_clip(rig);
-            animation.set_active_clip(scene, clip);
+            animation.switch_clip(scene, clip);
             animation.rest_unkeyed(scene, rig);
         });
     }
@@ -1474,7 +1475,7 @@ impl KayeApp {
     pub fn duplicate_animation(&mut self, clip: usize) {
         self.change_animations("Duplicate animation", |scene, animation| {
             let copy = animation.duplicate_clip(scene, clip);
-            animation.set_active_clip(scene, copy);
+            animation.switch_clip(scene, copy);
         });
     }
 
@@ -1512,6 +1513,15 @@ impl KayeApp {
         self.history.push_all(label, changes, before, after);
         self.timeline.selected.clear();
         self.prune_selected_keys();
+        // A target the new animation doesn't use is hidden now.
+        self.drop_removed_selection();
+    }
+
+    /// Turns Individual Animation Properties on or off for this project, as one undo step,
+    /// since turning it off lets go of every other animation's own modifiers.
+    fn set_separate_animations(&mut self, on: bool) {
+        let label = if on { "Individual animation properties on" } else { "Individual animation properties off" };
+        self.change_animations(label, |scene, animation| animation.set_separate(scene, on));
     }
 
     pub fn has_modifier(&self, bone: BoneId, kind: u8) -> bool {
@@ -1529,7 +1539,7 @@ impl KayeApp {
     pub fn remove_modifier(&mut self, index: usize) {
         self.edit_rig("Remove modifier", |scene, animation| {
             for bone in modifiers::remove(scene, index) {
-                animation.forget_bone(bone);
+                animation.forget_gone(scene, bone);
             }
         });
     }
@@ -1720,7 +1730,7 @@ impl KayeApp {
     pub fn delete_object(&mut self, bone: BoneId) {
         self.edit_rig("Delete", |scene, animation| {
             for gone in modifiers::delete_bones(scene, &[bone]) {
-                animation.forget_bone(gone);
+                animation.forget_gone(scene, gone);
             }
         });
     }
@@ -1750,7 +1760,7 @@ impl KayeApp {
                 gone.extend(modifiers::delete_folder(scene, folder));
             }
             for bone in gone {
-                animation.forget_bone(bone);
+                animation.forget_gone(scene, bone);
             }
         });
     }
@@ -2260,6 +2270,8 @@ impl KayeApp {
         // Smoothing changes how the keys play, so it comes from the project and
         // Preferences follows. What new keys start with stays a preference.
         self.settings.animation.smoothing = animation.smoothing;
+        // Each animation's own frame rate and modifiers are only there if the project kept them.
+        self.settings.animation.individual_properties = animation.separate;
         self.animation = Animation { default_easing: self.animation.default_easing, ..animation };
         self.frame = view.frame;
         self.camera.target = view.target;
@@ -2474,6 +2486,8 @@ impl KayeApp {
     }
 
     fn after_history(&mut self) {
+        // Undo can turn Individual Animation Properties back on or off.
+        self.settings.animation.individual_properties = self.animation.separate;
         self.animation.apply(&mut self.scene, self.frame);
         self.prune_selected_keys();
         self.drop_removed_selection();
@@ -2902,6 +2916,10 @@ impl KayeApp {
             ctx.set_zoom_factor(self.settings.interface.ui_scale);
         }
         let smoothing_changed = self.settings.animation.smoothing != self.animation.smoothing;
+        let separate = self.settings.animation.individual_properties;
+        if separate != self.animation.separate {
+            self.set_separate_animations(separate);
+        }
         self.sync_settings();
         if smoothing_changed {
             self.animation.apply(&mut self.scene, self.frame);
@@ -3209,6 +3227,7 @@ fn new_animation(settings: &Settings) -> Animation {
         end: settings.animation.default_end,
         fps: settings.animation.default_fps,
         looping: settings.animation.looping,
+        separate: settings.animation.individual_properties,
         ..Animation::default()
     }
 }

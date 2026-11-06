@@ -139,18 +139,18 @@ fn a_duplicate_is_a_separate_copy() {
 
 #[test]
 fn deleting_hands_over_to_another_and_a_rig_keeps_its_last() {
-    let scene = two_rigs();
+    let mut scene = two_rigs();
     let arm = bone_named(&scene, 0, "RightShoulder");
     let mut a = Animation::default();
     a.set_key(arm, 0, turned(0.3));
     a.ensure_clips(&scene);
     let first = a.active_clip(0).unwrap();
-    assert!(!a.remove_clip(&scene, first), "the last one stays");
+    assert!(!a.remove_clip(&mut scene, first), "the last one stays");
     let second = a.add_clip(0);
     a.set_active_clip(&scene, second);
     a.set_key(arm, 8, turned(0.8));
     a.show_clip(second);
-    assert!(a.remove_clip(&scene, second));
+    assert!(a.remove_clip(&mut scene, second));
     assert!(a.key_at(arm, 8).is_none(), "its keys went with it");
     assert!(a.key_at(arm, 0).is_some(), "the other one took over");
     assert_eq!(a.clips_of(0).len(), 1);
@@ -159,13 +159,13 @@ fn deleting_hands_over_to_another_and_a_rig_keeps_its_last() {
 
 #[test]
 fn removing_a_clip_keeps_later_ones_pointing_right() {
-    let scene = two_rigs();
+    let mut scene = two_rigs();
     let mut a = Animation::default();
     a.ensure_clips(&scene);
     let middle = a.add_clip(0);
     let last = a.add_clip(1);
     a.show_clip(last);
-    assert!(a.remove_clip(&scene, middle));
+    assert!(a.remove_clip(&mut scene, middle));
     assert_eq!(a.shown, Some(last - 1));
     assert_eq!(a.clips[a.shown.unwrap()].rig, 1);
 }

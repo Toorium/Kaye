@@ -226,8 +226,8 @@ fn every_sequence(scene: &Scene, animation: &Animation, rig: RigId) -> Result<Ve
     let mut first_problem = None;
     let current = animation.active_clip(rig);
     for clip in animation.clips_of(rig) {
-        let playing = animation.playing_clip(scene, clip);
         let mut world = scene.clone();
+        let playing = animation.playing_clip(&mut world, clip);
         if Some(clip) != current {
             playing.rest_unkeyed(&mut world, rig);
         }
@@ -362,9 +362,9 @@ fn single_moves(scene: &Scene, animation: &Animation, rig: RigId) -> Result<Sing
     let mut clips = Vec::new();
     let mut value = None;
     for clip in animation.clips_of(rig) {
-        let playing = animation.playing_clip(scene, clip);
         let mut world = scene.clone();
-        world.dynamics.set_baked(dynamics::bake(scene, &playing));
+        let playing = animation.playing_clip(&mut world, clip);
+        world.dynamics.set_baked(dynamics::bake(&world, &playing));
         let mut frames = Vec::new();
         for frame in playing.start..=playing.end.max(playing.start) {
             playing.apply(&mut world, frame as f32);
